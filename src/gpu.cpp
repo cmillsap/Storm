@@ -144,9 +144,9 @@ bool Gpu::initialise(bool enableDebugLayer)
                                          nullptr, IID_PPV_ARGS(&cmd)))) return false;
     cmd->Close();
 
-    // Two SRV/UAV slots for the shared render target, plus room for the
-    // volumes Phase 02 will add. RTVs are two per monitor.
-    srvHeap.create(device.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 32, true, "srv heap");
+    // Room for the render targets, the noise and light volumes, and the
+    // simulation's ping-ponged fields. RTVs are two per monitor.
+    srvHeap.create(device.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 64, true, "srv heap");
     rtvHeap.create(device.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 32, false, "rtv heap");
 
     if (FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)))) return false;

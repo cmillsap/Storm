@@ -15,9 +15,9 @@
 [numthreads(4, 4, 4)]
 void CSLightVolume(uint3 tid : SV_DispatchThreadID)
 {
-    if (any(tid >= LIGHT_VOLUME_RES)) return;
+    if (any(tid >= (uint3)gLightVolumeRes)) return;
 
-    float3 uvw = (float3(tid) + 0.5) / float3(LIGHT_VOLUME_RES);
+    float3 uvw = (float3(tid) + 0.5) / float(gLightVolumeRes);
     float3 p   = lerp(cloudBoxMin(), cloudBoxMax(), uvw);
 
     // Geometrically growing stride: fine detail close to the sample where it
@@ -110,7 +110,14 @@ void CSCloud(uint3 tid : SV_DispatchThreadID)
                 float tr  = exp(-tau);
 
                 float light  = sampleLightVolume(p);
-                float powder = 1.0 - exp(-tau * kPowder);
+                // Powder darkens material a ray has only just entered. Taken
+                // literally it falls to zero with the optical depth, which was
+                // fine against Spike 02's analytic container but not against a
+                // simulated field: numerical diffusion leaves a lot of very
+                // thin material, and unfloored it renders as grey haze rather
+                // than lit cloud. A floor keeps the wisps in the light.
+                float powder = kPowderFloor
+                             + (1.0 - kPowderFloor) * (1.0 - exp(-tau * kPowder));
 
                 // Wrenninge multiple-scattering octaves. Single scattering
                 // alone leaves interiors black, because direct transmittance

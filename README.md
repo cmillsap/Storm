@@ -6,11 +6,12 @@ supercell, and drops a tornado out of it — with a different storm every run.
 Direct3D 12, compute-shader volumetric rendering. Screensaver shell modelled on
 [cmillsap/Juggler](https://github.com/cmillsap/Juggler).
 
-**Status: Phase 01 complete.** `Storm.scr` builds, installs and runs, and draws
-a volumetric cloud. The four validation spikes that preceded it are kept under
-`spikes/`.
+**Status: Phase 02 complete.** `Storm.scr` builds, installs and runs, and grows
+its own cumulus: the shape on screen comes out of a fluid solver, not a
+procedural container. The four validation spikes that preceded it are kept
+under `spikes/`.
 
-![Phase 01: a raymarched cumulus congestus](docs/phase01-cloud.png)
+![Phase 02: a cumulus congestus grown by the simulation](docs/phase02-simulated-cloud.png)
 
 ## Building and running
 
@@ -90,15 +91,96 @@ including the light volume rebuild, the march, the resolve and the composite.
 
 Known limits: reprojection assumes the camera does not translate, which holds
 until the camera system in Phase 05; it will need the cloud's mean distance
-carried alongside the colour. Nothing in the cloud is simulated yet — the shape
-is the analytic container from Spike 02, and Phase 02 replaces it with a volume.
+carried alongside the colour. Nothing in the cloud is simulated at this point —
+the shape is the analytic container from Spike 02, which Phase 02 replaces.
+
+## Phase 02 — GPU simulation
+
+The container is gone. `sampleDensity` now reads condensate out of a fluid
+solver, and the noise that used to *be* the cloud only erodes it.
+
+- **A staggered-grid solver in compute**, ported from the CPU solvers of Spikes
+  03 and 04: semi-Lagrangian advection, buoyancy with the virtual-temperature
+  effect and condensate loading, saturation adjustment with latent heat, and a
+  20-iteration Jacobi pressure projection. 128³ cells at 50 m — a 6.4 km cube.
+  **No vorticity confinement**, per Spike 03.
+- **The simulation keeps its own clock**, 20 steps a second at 1 s of storm
+  time per step, decoupled from the display: a 144 Hz monitor does not cost 144
+  fluid steps a second, and a 30 fps one does not slow the weather down.
+- **The light volume rebuilds at simulation rate, not frame rate** — the
+  amortisation the plan called for, now that there is something to amortise
+  against. It is skipped entirely on frames where the solver did not step.
+- **Density is condensate**, scaled against a reference and then eroded by the
+  same Perlin–Worley and Worley noise Spike 02 tuned. The solver supplies the
+  low-frequency shape; the noise supplies everything below the 50 m cell.
+
+**4.83 ms per frame at 3440×1440** on an RTX 5060 Ti — 14% of a 30 fps frame —
+including the simulation step, the light volume rebuild, the march, the resolve
+and the composite. Adding the solver cost nothing measurable: it is the Phase
+01 frame time within noise, because 20 steps a second spread across 30 frames
+is two thirds of a step per frame.
+
+### What it does on screen
+
+Seeded from rest, it runs a cumulus life cycle without being told to, in about
+two minutes:
+
+| | |
+|---|---|
+| ~20 s | a flat-based humilis, one puff wide |
+| ~28 s | congestus, cauliflower turrets sharing that base |
+| ~36 s | the tower deepens and hardens |
+| ~50 s | the top reaches the cap and starts to spread |
+| ~65 s | spread top, ragged underside, the forcing now off |
+| ~85 s | the crown breaks into fragments |
+| ~110 s | dissipating |
+
+### Three calibration findings
+
+- **The sounding needed a mixed layer.** With one 4 K/km lapse rate all the way
+  to the ground, a thermal has to be heated for several minutes of storm time
+  before it can climb the few hundred metres to its condensation level, so the
+  first cloud appeared only as the forcing was already decaying — it grew and
+  died but never had a mature phase. A real boundary layer is mixed and very
+  nearly neutral. Adding one, 600 m deep, is what turned a wisp into a cumulus.
+- **Constant vapour in that layer is what makes the base flat.** "Well mixed"
+  means every parcel carries the same vapour, so every parcel condenses at the
+  same height. With relative humidity falling smoothly from the ground instead,
+  each thermal gets its own condensation level and the base is a point rather
+  than a plane. Spike 02 found the same thing from the other side: flatness
+  comes from cutting condensation on sharply, not from shaping the cloud.
+- **The source has to be a sheet, not a ball.** A spherical warm source rises
+  as one mushroom, stem and cap, because that is what a spherical warm source
+  does. Spreading the same heat over a 2 km wide, 400 m deep patch inside the
+  mixed layer, with low-frequency noise across it so it is not axisymmetric,
+  lifts a whole layer at once and gives several turrets over one base.
+
+### Two bugs worth remembering
+
+- **The light volume resolution was held in two places** and drifted: the host
+  dispatched 96³ while the shader's constant still said 64, so two thirds of
+  the volume was never written and the cloud top sampled uninitialised memory
+  as full shadow. It showed up as a dark cap, and I first misdiagnosed it as
+  the powder term and "fixed" it with a floor. The resolution now travels in
+  the frame constants, and there is one source of truth.
+- **The condensate reference is a two-sided error.** Set an order of magnitude
+  low, every cell saturates to one, the erosion has no gradient to bite into
+  and the cloud is a smooth blob. Set above what the solver actually produces,
+  the erosion threshold sits above the density everywhere in the lower cloud
+  and eats the flat base entirely, leaving one small puff high up. It has to be
+  read off what the solver produces — just under the peak it reaches.
+
+Known limits: it is one cell, in still air, with no shear and no rotation —
+Phases 03 and 04 own the storm arc and the supercell. The underside reads grey
+and slightly dead, and the sub-cloud stalk hangs lower than a real cumulus's
+would.
 
 
 
 ## Spikes
 
-Three spikes were identified before committing to the build, each retiring a
-specific assumption.
+Four spikes were run before committing to the build, each retiring a specific
+assumption.
 
 | | Spike | Question | Status |
 |---|---|---|---|
@@ -198,11 +280,15 @@ src/                     the screensaver itself
   app.h/.cpp             monitor enumeration, windows, input, frame loop
   view.h/.cpp            one output: window, swap chain, crop-to-fill
   renderer.h/.cpp        shared render target and the passes over it
+  simulation.h/.cpp      the fluid solver: resources, stepping, the sounding
+  slots.h                descriptor table layout, shared by renderer and simulation
   gpu.h/.cpp             D3D12 device, descriptor heaps, runtime shader compilation
 shaders/
   common.hlsli           frame constants and bindings, included everywhere
   atmosphere.hlsli       Rayleigh/Mie scattering, shared by sky and aerial perspective
   clouds.hlsli           cloud density, shape and lighting constants
+  sim.hlsli              the staggered grid, the sounding, and how to sample both
+  sim.hlsl               advect, force, buoyancy, condense, project
   noise_gen.hlsl         tileable Perlin-Worley and Worley volumes
   cloud.hlsl             light volume build and the cloud march
   resolve.hlsl           temporal reprojection and accumulation

@@ -26,15 +26,20 @@ cbuffer Frame : register(b0)
     float2 gJitter;        float2 gPad0;
 
     float  gCloudBottom;   float gCloudTop;    float gCoverage;    float gDensityScale;
-    int    gNumSteps;      int   gFrameIndex;  int   gHistoryIndex; int  gPad1;
+    int    gNumSteps;      int   gFrameIndex;  int   gHistoryIndex; int  gLightVolumeRes;
 };
 
-// The crop rectangle differs per monitor, so it stays out of the shared buffer
-// and arrives as root constants on the blit alone.
-cbuffer Blit : register(b1)
+// Values that change between dispatches inside one command list, so they
+// cannot live in a shared constant buffer: the crop rectangle differs per
+// monitor, and the ping-pong phases alternate per simulation pass and per
+// Jacobi iteration. Root constants, set immediately before each dispatch.
+cbuffer Push : register(b1)
 {
     float2 gCropScale;
     float2 gCropOffset;
+    int    gSimPhase;      // which simulation set currently holds the data
+    int    gJacobiPhase;   // which pressure buffer the current iteration reads
+    int2   gPushPad;
 };
 
 RWTexture2D<float4> gSharedTarget  : register(u0);   // full resolution, RGBA8
@@ -55,6 +60,9 @@ Texture3D<float4>   gDetailNoise   : register(t6);
 
 SamplerState gClamp : register(s0);
 SamplerState gWrap  : register(s1);
+// Wraps horizontally and clamps vertically, matching the simulation's periodic
+// sides and rigid ground and lid.
+SamplerState gSimSampler : register(s2);
 
 static const float kPi = 3.14159265;
 

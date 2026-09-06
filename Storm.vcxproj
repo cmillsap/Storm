@@ -87,6 +87,7 @@
     <ClCompile Include="src\gpu.cpp" />
     <ClCompile Include="src\main.cpp" />
     <ClCompile Include="src\renderer.cpp" />
+    <ClCompile Include="src\simulation.cpp" />
     <ClCompile Include="src\view.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -95,6 +96,8 @@
     <ClInclude Include="src\common.h" />
     <ClInclude Include="src\gpu.h" />
     <ClInclude Include="src\renderer.h" />
+    <ClInclude Include="src\simulation.h" />
+    <ClInclude Include="src\slots.h" />
     <ClInclude Include="src\view.h" />
   </ItemGroup>
   <ItemGroup>
@@ -104,7 +107,14 @@
     <!-- Compiled at runtime by DXC, so listed for the IDE rather than built. -->
     <None Include="shaders\atmosphere.hlsli" />
     <None Include="shaders\blit.hlsl" />
-    <None Include="shaders\sky.hlsl" />
+    <None Include="shaders\cloud.hlsl" />
+    <None Include="shaders\clouds.hlsli" />
+    <None Include="shaders\common.hlsli" />
+    <None Include="shaders\composite.hlsl" />
+    <None Include="shaders\noise_gen.hlsl" />
+    <None Include="shaders\resolve.hlsl" />
+    <None Include="shaders\sim.hlsl" />
+    <None Include="shaders\sim.hlsli" />
   </ItemGroup>
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

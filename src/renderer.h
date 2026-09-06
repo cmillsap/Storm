@@ -9,6 +9,8 @@
 #pragma once
 
 #include "view.h"
+#include "slots.h"
+#include "simulation.h"
 #include <vector>
 
 // Mirrors the cbuffer in common.hlsli. HLSL packs float3 + float into one
@@ -31,37 +33,9 @@ struct alignas(16) FrameConstants
     float jitter[2];        float pad0[2];
 
     float cloudBottom;      float cloudTop;     float coverage;     float densityScale;
-    int32_t numSteps;       int32_t frameIndex; int32_t historyIndex; int32_t pad1;
+    int32_t numSteps;       int32_t frameIndex; int32_t historyIndex; int32_t lightVolumeRes;
 };
 static_assert(sizeof(FrameConstants) % 16 == 0, "FrameConstants must be 16-byte aligned");
-
-struct BlitConstants
-{
-    float cropScale[2];
-    float cropOffset[2];
-};
-
-// Descriptor table layout, fixed so the shaders can name registers directly.
-enum Slot
-{
-    kUavSharedTarget = 0,
-    kUavCloudCurrent,
-    kUavCloudHistory0,
-    kUavCloudHistory1,
-    kUavLightVolume,
-    kUavBaseNoise,
-    kUavDetailNoise,
-    kUavCount,
-
-    kSrvSharedTarget = kUavCount,
-    kSrvCloudCurrent,
-    kSrvCloudHistory0,
-    kSrvCloudHistory1,
-    kSrvLightVolume,
-    kSrvBaseNoise,
-    kSrvDetailNoise,
-    kSlotCount
-};
 
 void ComputeSharedTargetSize(const std::vector<View>& views, UINT& outWidth, UINT& outHeight);
 
@@ -84,11 +58,14 @@ struct Renderer
     ComPtr<ID3D12Resource> constantBuffer;
     uint8_t* constantsMapped = nullptr;
 
+    Simulation simulation;
+
     UINT halfWidth = 0, halfHeight = 0;
     int  frameIndex = 0;
     int  historyIndex = 0;
     bool historyValid = false;
     bool noiseReady = false;
+    bool lightVolumeReady = false;
 
     bool initialise(Gpu& g);
     void shutdown();
@@ -97,7 +74,7 @@ struct Renderer
     bool createTarget(UINT width, UINT height);
 
     void generateNoise();                    // once, at startup
-    void renderTargets(float timeSeconds);
+    void renderTargets(float timeSeconds, float deltaSeconds);
     void presentView(View& view);
     void finishFrame();
 

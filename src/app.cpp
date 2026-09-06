@@ -229,6 +229,7 @@ int App::run()
 
     const double frameSeconds = 1.0 / (double)kTargetFps;
     LARGE_INTEGER nextFrame = start;
+    float lastFrameTime = 0.0f;
 
     MSG msg = {};
     while (m_running)
@@ -253,8 +254,11 @@ int App::run()
         const float elapsed =
             (float)((double)(now.QuadPart - start.QuadPart) / (double)frequency.QuadPart);
 
+        const float delta = elapsed - lastFrameTime;
+        lastFrameTime = elapsed;
+
         m_gpu.beginFrame();
-        m_renderer.renderTargets(elapsed);
+        m_renderer.renderTargets(elapsed, delta);
         for (View& v : m_views) m_renderer.presentView(v);
         m_renderer.finishFrame();
         m_gpu.submitAndWait();
@@ -300,12 +304,16 @@ bool App::captureFrame(UINT width, UINT height, float atTime, const wchar_t* pat
     // frozen camera the reprojection is an identity transform and a capture
     // would prove nothing about it. Arriving with the camera in motion is what
     // makes ghosting visible if it is there.
-    const int kSettleFrames = 30;
+    // Run the whole history up to the requested moment at the real frame rate.
+    // The simulation has no way to jump to a state - a cloud has to be grown -
+    // and holding time still would leave the temporal reprojection an identity
+    // transform, so a capture would prove nothing about it either.
     const float step = 1.0f / 30.0f;
-    for (int i = 0; i < kSettleFrames; ++i)
+    const int frames = std::max(30, std::min(4000, (int)(atTime / step)));
+    for (int i = 0; i < frames; ++i)
     {
         gpu.beginFrame();
-        renderer.renderTargets(atTime - (float)(kSettleFrames - 1 - i) * step);
+        renderer.renderTargets((float)i * step, step);
         renderer.finishFrame();
         gpu.submitAndWait();
     }
@@ -335,7 +343,7 @@ bool App::captureFrame(UINT width, UINT height, float atTime, const wchar_t* pat
                                                     IID_PPV_ARGS(&readback)), "capture readback");
 
     gpu.beginFrame();
-    renderer.renderTargets(atTime);      // leaves the target readable by a shader
+    renderer.renderTargets(atTime, 1.0f / 30.0f);   // leaves the target readable by a shader
     auto toCopy = Gpu::transition(target.texture.Get(),
                                   D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
                                   D3D12_RESOURCE_STATE_COPY_SOURCE);
@@ -415,7 +423,7 @@ bool App::benchmark(UINT width, UINT height, int frames, const wchar_t* path)
         for (int i = 0; i < count; ++i)
         {
             gpu.beginFrame();
-            renderer.renderTargets(1.0f + (float)i * 0.033f);
+            renderer.renderTargets(1.0f + (float)i * 0.033f, 0.033f);
             renderer.finishFrame();
             gpu.submitAndWait();
         }
@@ -437,8 +445,10 @@ bool App::benchmark(UINT width, UINT height, int frames, const wchar_t* path)
         "frames        %d\n\n"
         "frame         %.2f ms  (%.0f fps uncapped)\n"
         "budget        %.0f%% of a 30 fps frame, %.0f%% of a 60 fps frame\n\n"
-        "Includes the light volume rebuild, the cloud march, the temporal\n"
-        "resolve and the full-resolution composite. Excludes present.\n",
+        "Includes the simulation step, the light volume rebuild, the cloud\n"
+        "march, the temporal resolve and the full-resolution composite.\n"
+        "Excludes present. The simulation keeps its own 20 Hz, so a frame\n"
+        "carries 0.67 of a step at 30 fps and proportionally less above it.\n",
         Narrow(gpu.adapterName.c_str()).c_str(),
         width, height, renderer.halfWidth, renderer.halfHeight, frames,
         ms, 1000.0 / ms, ms / 33.3 * 100.0, ms / 16.7 * 100.0);

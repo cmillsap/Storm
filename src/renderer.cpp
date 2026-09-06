@@ -14,7 +14,9 @@ static const float kSunCycleSeconds = 300.0f;
 
 static const UINT kBaseNoiseRes   = 128;
 static const UINT kDetailNoiseRes = 32;
-static const UINT kLightVolumeRes = 64;
+// Matched against the simulation cell size: at 64 the light volume was
+// coarser than the density it shades and left visible facets.
+static const UINT kLightVolumeRes = 96;
 
 // The cloud march is the expensive pass and it is the one the temporal resolve
 // exists to amortise, so it runs at half the output resolution.
@@ -102,11 +104,11 @@ bool Renderer::initialise(Gpu& g)
     ranges[0].BaseShaderRegister = 0;
     ranges[0].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
     ranges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    ranges[1].NumDescriptors = kSlotCount - kUavCount;
+    ranges[1].NumDescriptors = kSrvCount;
     ranges[1].BaseShaderRegister = 0;
     ranges[1].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-    D3D12_ROOT_PARAMETER params[3] = {};
+    D3D12_ROOT_PARAMETER params[4] = {};
     params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     params[0].DescriptorTable.NumDescriptorRanges = 2;
     params[0].DescriptorTable.pDescriptorRanges = ranges;
@@ -120,11 +122,15 @@ bool Renderer::initialise(Gpu& g)
     // cannot live in the shared buffer.
     params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     params[2].Constants.ShaderRegister = 1;
-    params[2].Constants.Num32BitValues = sizeof(BlitConstants) / 4;
+    params[2].Constants.Num32BitValues = sizeof(PushConstants) / 4;
     params[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    // Simulation constants, constant for the frame.
+    params[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+    params[3].Descriptor.ShaderRegister = 2;
+    params[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
-    D3D12_STATIC_SAMPLER_DESC samplers[2] = {};
-    for (int i = 0; i < 2; ++i)
+    D3D12_STATIC_SAMPLER_DESC samplers[3] = {};
+    for (int i = 0; i < 3; ++i)
     {
         samplers[i].Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
         samplers[i].MaxAnisotropy = 1;
@@ -135,11 +141,16 @@ bool Renderer::initialise(Gpu& g)
     }
     samplers[0].AddressU = samplers[0].AddressV = samplers[0].AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
     samplers[1].AddressU = samplers[1].AddressV = samplers[1].AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    // The simulation is periodic horizontally and rigid at the ground and lid,
+    // so its sampler wraps in x and z and clamps in y.
+    samplers[2].AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    samplers[2].AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    samplers[2].AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
 
     D3D12_ROOT_SIGNATURE_DESC desc = {};
-    desc.NumParameters = 3;
+    desc.NumParameters = 4;
     desc.pParameters = params;
-    desc.NumStaticSamplers = 2;
+    desc.NumStaticSamplers = 3;
     desc.pStaticSamplers = samplers;
     desc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
 
@@ -233,6 +244,7 @@ bool Renderer::initialise(Gpu& g)
     D3D12_RANGE noRead = { 0, 0 };
     STORM_CHECK(constantBuffer->Map(0, &noRead, (void**)&constantsMapped), "map frame constants");
 
+    if (!simulation.create(*gpu, rootSignature.Get())) return false;
     return true;
 }
 
@@ -243,6 +255,7 @@ void Renderer::shutdown()
         constantBuffer->Unmap(0, nullptr);
         constantsMapped = nullptr;
     }
+    simulation.shutdown();
     targets.clear();
     cloudCurrent.Reset();
     cloudHistory[0].Reset();
@@ -382,13 +395,15 @@ void Renderer::fillConstants(FrameConstants& c, const RenderTarget& target, floa
     c.sunDirection[2] = std::cos(azimuth) * std::cos(elevation);
     c.sunIntensity = 22.0f;
 
-    // The Spike 02 congestus, in the same place and at the same scale.
-    c.cloudCentre[0] = 0.0f;
-    c.cloudCentre[1] = 0.0f;
-    c.cloudCentre[2] = 7000.0f;
-    c.cloudRadius = 2100.0f;
-    c.cloudBottom = 1100.0f;
-    c.cloudTop = 6600.0f;
+    // The cloud volume is the simulation domain. cloudBottom and cloudTop are
+    // still used for the height-dependent detail flip and ambient term.
+    const float half = simulation.extent() * 0.5f;
+    c.cloudCentre[0] = simulation.origin[0] + half;
+    c.cloudCentre[1] = simulation.origin[1] + half;
+    c.cloudCentre[2] = simulation.origin[2] + half;
+    c.cloudRadius = half;
+    c.cloudBottom = simulation.origin[1];
+    c.cloudTop = simulation.origin[1] + simulation.extent();
     c.coverage = 0.55f;
     c.densityScale = 1.0f;
 
@@ -404,7 +419,7 @@ void Renderer::fillConstants(FrameConstants& c, const RenderTarget& target, floa
     c.numSteps = 96;
     c.frameIndex = frameIndex;
     c.historyIndex = historyIndex;
-    c.pad1 = 0;
+    c.lightVolumeRes = (int32_t)kLightVolumeRes;
 }
 
 void Renderer::generateNoise()
@@ -413,8 +428,13 @@ void Renderer::generateNoise()
 
     gpu->beginFrame();
     gpu->cmd->SetComputeRootSignature(rootSignature.Get());
-    gpu->cmd->SetComputeRootDescriptorTable(0, gpu->srvHeap.gpu(0));
-    gpu->cmd->SetComputeRootConstantBufferView(1, constantBuffer->GetGPUVirtualAddress());
+    gpu->cmd->SetComputeRootDescriptorTable(kRootTable, gpu->srvHeap.gpu(0));
+    gpu->cmd->SetComputeRootConstantBufferView(kRootFrame, constantBuffer->GetGPUVirtualAddress());
+    gpu->cmd->SetComputeRootConstantBufferView(kRootSim, simulation.constantsAddress());
+
+    PushConstants push = {};
+    push.cropScale[0] = push.cropScale[1] = 1.0f;
+    gpu->cmd->SetComputeRoot32BitConstants(kRootPush, sizeof(PushConstants) / 4, &push, 0);
 
     gpu->cmd->SetPipelineState(psoGenBase.Get());
     gpu->cmd->Dispatch(kBaseNoiseRes / 4, kBaseNoiseRes / 4, kBaseNoiseRes / 4);
@@ -433,8 +453,13 @@ void Renderer::generateNoise()
     noiseReady = true;
 }
 
-void Renderer::renderTargets(float timeSeconds)
+void Renderer::renderTargets(float timeSeconds, float deltaSeconds)
 {
+    // The simulation owns the density the cloud pass reads, so it runs first.
+    // It steps at its own rate and reports whether the volume actually changed.
+    const bool simulationStepped = simulation.advance(deltaSeconds);
+    simulation.transitionForReading();
+
     for (RenderTarget& target : targets)
     {
         // A slow oscillation rather than a continuous sweep, so the cloud stays
@@ -447,17 +472,37 @@ void Renderer::renderTargets(float timeSeconds)
         std::memcpy(constantsMapped, &constants, sizeof(constants));
 
         gpu->cmd->SetComputeRootSignature(rootSignature.Get());
-        gpu->cmd->SetComputeRootDescriptorTable(0, gpu->srvHeap.gpu(0));
-        gpu->cmd->SetComputeRootConstantBufferView(1, constantBuffer->GetGPUVirtualAddress());
+        gpu->cmd->SetComputeRootDescriptorTable(kRootTable, gpu->srvHeap.gpu(0));
+        gpu->cmd->SetComputeRootConstantBufferView(kRootFrame, constantBuffer->GetGPUVirtualAddress());
+        gpu->cmd->SetComputeRootConstantBufferView(kRootSim, simulation.constantsAddress());
 
-        // 1. Sun transmittance through the cloud.
-        gpu->cmd->SetPipelineState(psoLightVolume.Get());
-        gpu->cmd->Dispatch(kLightVolumeRes / 4, kLightVolumeRes / 4, kLightVolumeRes / 4);
+        PushConstants push = {};
+        push.cropScale[0] = push.cropScale[1] = 1.0f;
+        push.simPhase = simulation.phase;
+        gpu->cmd->SetComputeRoot32BitConstants(kRootPush, sizeof(PushConstants) / 4, &push, 0);
 
-        auto lightToRead = Gpu::transition(lightVolume.Get(),
-                                           D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                                           D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        gpu->cmd->ResourceBarrier(1, &lightToRead);
+        // 1. Sun transmittance, rebuilt only when the volume moved. This is the
+        //    plan's amortisation: lighting at simulation rate, not frame rate.
+        //    Lighting changes slowly and the sun barely moves between frames.
+        if (simulationStepped || !lightVolumeReady)
+        {
+            if (lightVolumeReady)
+            {
+                auto toWrite = Gpu::transition(lightVolume.Get(),
+                                               D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                               D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+                gpu->cmd->ResourceBarrier(1, &toWrite);
+            }
+
+            gpu->cmd->SetPipelineState(psoLightVolume.Get());
+            gpu->cmd->Dispatch(kLightVolumeRes / 4, kLightVolumeRes / 4, kLightVolumeRes / 4);
+
+            auto toRead = Gpu::transition(lightVolume.Get(),
+                                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                                          D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            gpu->cmd->ResourceBarrier(1, &toRead);
+            lightVolumeReady = true;
+        }
 
         // 2. The cloud march, at half resolution.
         gpu->cmd->SetPipelineState(psoCloud.Get());
@@ -486,10 +531,9 @@ void Renderer::renderTargets(float timeSeconds)
         gpu->cmd->SetPipelineState(psoComposite.Get());
         gpu->cmd->Dispatch((target.width + 7) / 8, (target.height + 7) / 8, 1);
 
-        // Hand everything back for the next frame.
+        // Hand the cloud buffers back for the next frame. The light volume and
+        // the simulation stay readable; they are rebuilt on their own schedule.
         D3D12_RESOURCE_BARRIER restore[] = {
-            Gpu::transition(lightVolume.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                                               D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
             Gpu::transition(cloudHistory[historyIndex ^ 1].Get(),
                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                             D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
@@ -499,7 +543,7 @@ void Renderer::renderTargets(float timeSeconds)
             Gpu::transition(target.texture.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                                                   D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE),
         };
-        gpu->cmd->ResourceBarrier(4, restore);
+        gpu->cmd->ResourceBarrier(3, restore);
 
         for (int i = 0; i < 3; ++i)
         {
@@ -534,13 +578,15 @@ void Renderer::presentView(View& view)
     gpu->cmd->RSSetViewports(1, &vp);
     gpu->cmd->RSSetScissorRects(1, &scissor);
 
-    BlitConstants blit = {};
-    view.cropToFill(blit.cropScale, blit.cropOffset);
+    PushConstants push = {};
+    view.cropToFill(push.cropScale, push.cropOffset);
+    push.simPhase = simulation.phase;
 
     gpu->cmd->SetGraphicsRootSignature(rootSignature.Get());
-    gpu->cmd->SetGraphicsRootDescriptorTable(0, gpu->srvHeap.gpu(0));
-    gpu->cmd->SetGraphicsRootConstantBufferView(1, constantBuffer->GetGPUVirtualAddress());
-    gpu->cmd->SetGraphicsRoot32BitConstants(2, sizeof(BlitConstants) / 4, &blit, 0);
+    gpu->cmd->SetGraphicsRootDescriptorTable(kRootTable, gpu->srvHeap.gpu(0));
+    gpu->cmd->SetGraphicsRootConstantBufferView(kRootFrame, constantBuffer->GetGPUVirtualAddress());
+    gpu->cmd->SetGraphicsRoot32BitConstants(kRootPush, sizeof(PushConstants) / 4, &push, 0);
+    gpu->cmd->SetGraphicsRootConstantBufferView(kRootSim, simulation.constantsAddress());
     gpu->cmd->SetPipelineState(psoBlit.Get());
     gpu->cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     gpu->cmd->DrawInstanced(3, 1, 0, 0);
