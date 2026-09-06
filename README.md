@@ -6,7 +6,60 @@ supercell, and drops a tornado out of it — with a different storm every run.
 Direct3D 12, compute-shader volumetric rendering. Screensaver shell modelled on
 [cmillsap/Juggler](https://github.com/cmillsap/Juggler).
 
-**Status: de-risking. No production code yet — the spikes come first.**
+**Status: Phase 00 complete.** `Storm.scr` builds, installs and runs; the four
+validation spikes that preceded it are kept under `spikes/`.
+
+![Phase 00: the sky at the low end of the sun cycle](docs/phase00-sky.png)
+
+## Building and running
+
+Requires Visual Studio 2022 with the C++ desktop workload and the Windows
+10/11 SDK. No external SDK or package manager — `dxcompiler.dll` and `dxil.dll`
+are copied out of the Windows SDK at build time.
+
+```
+build.bat                       Release build (or: build.bat Debug)
+build\Release\Storm.scr /s      run full screen
+build\Release\Storm.scr /c      configuration dialog
+```
+
+To install, copy `Storm.scr`, `dxcompiler.dll`, `dxil.dll` and the `shaders`
+folder together into a permanent location, then right-click `Storm.scr` and
+choose **Install**. They must stay together — the shaders are compiled at
+startup, not baked into the executable.
+
+### Development switches
+
+Windows never passes these, so they cannot collide with the screensaver
+contract. A screensaver takes over the display, which makes it almost
+impossible to inspect while developing; the spikes established that looking at
+the image is the only way to catch a renderer that is fast and wrong.
+
+| | |
+|---|---|
+| `/w` | Run in an ordinary window rather than full screen |
+| `/capture <file.bmp> [w h] [seconds]` | Render one frame to disk |
+| `/probe [file.txt]` | Report the monitor layout and the mirroring arithmetic |
+
+Note that `.scr` files have a shell association whose default verb is *Install*,
+so launching one from a script needs `UseShellExecute = false` or it will not
+run the way you expect.
+
+## Phase 00 — shell and skeleton
+
+- **The `.scr` contract**: `/s` full screen, `/c` configure, `/p <hwnd>`
+  preview, including the named-event handshake that lets a new instance evict a
+  running preview before claiming its window.
+- **Multi-monitor**, one borderless window and swap chain per display, sharing
+  a single device, one simulation and one rendered frame.
+- **The state/view split** that keeps mirroring a policy rather than an
+  assumption — see `src/view.h`.
+- **A real Rayleigh/Mie atmosphere** carried over from Spike 02, with the sun on
+  a five-minute arc, rather than a placeholder gradient. Phase 01 adds a cloud
+  march to this rather than replacing it.
+- Frames capped at 30 fps; measured at roughly 6% of one CPU core.
+
+
 
 ## Spikes
 
@@ -106,6 +159,17 @@ benchmark meaningless: [spikes/01-perf/README.md](spikes/01-perf/README.md).
 ## Layout
 
 ```
+src/                     the screensaver itself
+  main.cpp               entry point, .scr argument contract, instance handshake
+  app.h/.cpp             monitor enumeration, windows, input, frame loop
+  view.h/.cpp            one output: window, swap chain, crop-to-fill
+  renderer.h/.cpp        shared render target and the passes over it
+  gpu.h/.cpp             D3D12 device, descriptor heaps, runtime shader compilation
+shaders/
+  atmosphere.hlsli       Rayleigh/Mie scattering, shared by sky and aerial perspective
+  sky.hlsl               Phase 00 sky and ground
+  blit.hlsl              presentation blit with the crop rectangle
+
 spikes/01-perf/          what a raymarch step costs
   src/main.cpp           D3D12 host, benchmark driver, BMP capture
   shaders/

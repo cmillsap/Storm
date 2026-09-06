@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <ProjectGuid>{7C1F2E4A-9B03-4D65-8E27-5A61D0C3B412}</ProjectGuid>
+    <RootNamespace>Storm</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)'=='Release'" Label="Configuration">
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)'=='Debug'" Label="Configuration">
+    <UseDebugLibraries>true</UseDebugLibraries>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+
+  <PropertyGroup>
+    <OutDir>$(ProjectDir)build\$(Configuration)\</OutDir>
+    <IntDir>$(ProjectDir)build\obj\$(Configuration)\</IntDir>
+    <TargetName>Storm</TargetName>
+    <!-- Windows only lists .scr files in the screen saver picker. -->
+    <TargetExt>.scr</TargetExt>
+  </PropertyGroup>
+
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <WarningLevel>Level3</WarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <PreprocessorDefinitions>_UNICODE;UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <AdditionalDependencies>d3d12.lib;dxgi.lib;dxguid.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Release'">
+    <ClCompile>
+      <Optimization>MaxSpeed</Optimization>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <PreprocessorDefinitions>NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Debug'">
+    <ClCompile>
+      <Optimization>Disabled</Optimization>
+      <PreprocessorDefinitions>_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+
+  <ItemGroup>
+    <ClCompile Include="src\app.cpp" />
+    <ClCompile Include="src\gpu.cpp" />
+    <ClCompile Include="src\main.cpp" />
+    <ClCompile Include="src\renderer.cpp" />
+    <ClCompile Include="src\view.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="resource.h" />
+    <ClInclude Include="src\app.h" />
+    <ClInclude Include="src\common.h" />
+    <ClInclude Include="src\gpu.h" />
+    <ClInclude Include="src\renderer.h" />
+    <ClInclude Include="src\view.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="Storm.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Compiled at runtime by DXC, so listed for the IDE rather than built. -->
+    <None Include="shaders\atmosphere.hlsli" />
+    <None Include="shaders\blit.hlsl" />
+    <None Include="shaders\sky.hlsl" />
+  </ItemGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+
+  <Target Name="StormStageRuntime" AfterTargets="Build">
+    <!-- DXC is loaded at runtime, so both DLLs must sit beside Storm.scr.
+         dxil.dll is the validator; without it the driver rejects the shaders. -->
+    <PropertyGroup>
+      <StormSdkBin>$(WindowsSdkDir)bin\$(TargetPlatformVersion)\x64\</StormSdkBin>
+    </PropertyGroup>
+    <Copy SourceFiles="$(StormSdkBin)dxcompiler.dll;$(StormSdkBin)dxil.dll"
+          DestinationFolder="$(OutDir)" SkipUnchangedFiles="true"
+          Condition="Exists('$(StormSdkBin)dxcompiler.dll')" />
+    <ItemGroup>
+      <StormShaders Include="shaders\*.hlsl;shaders\*.hlsli" />
+    </ItemGroup>
+    <Copy SourceFiles="@(StormShaders)" DestinationFolder="$(OutDir)shaders\" SkipUnchangedFiles="true" />
+    <Warning Text="dxcompiler.dll not found under $(StormSdkBin) - Storm.scr will not start."
+             Condition="!Exists('$(StormSdkBin)dxcompiler.dll')" />
+  </Target>
+</Project>

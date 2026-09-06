@@ -1,0 +1,66 @@
+// Storm - the screensaver application: windows, input, and the frame loop.
+#pragma once
+
+#include "renderer.h"
+#include <vector>
+
+enum class Mode
+{
+    FullScreen,   // /s
+    Preview,      // /p <hwnd>
+    Windowed,     // /w - development only, never passed by Windows
+};
+
+class App
+{
+public:
+    bool initialise(HINSTANCE instance, Mode mode, HWND previewWindow);
+    int  run();
+    void shutdown();
+
+    // Renders one frame to a BMP without creating a swap chain. A screensaver
+    // takes over the display, which makes it almost impossible to inspect while
+    // developing; the spikes established that looking at the image is the only
+    // way to catch a renderer that is fast and wrong.
+    static bool captureFrame(UINT width, UINT height, float atTime, const wchar_t* path);
+
+private:
+    static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
+    static BOOL CALLBACK MonitorCallback(HMONITOR monitor, HDC, LPRECT rect, LPARAM param);
+
+    bool createFullScreenViews();
+    bool createPreviewView(HWND previewWindow);
+    bool createWindowedView();
+    bool isOwnWindow(HWND hwnd) const;
+    void onInputActivity(bool force);
+    void onMouseMove(POINT screenPosition);
+
+    static App* s_instance;
+
+    HINSTANCE m_instance = nullptr;
+    Mode      m_mode = Mode::FullScreen;
+    bool      m_running = false;
+
+    Gpu       m_gpu;
+    Renderer  m_renderer;
+    std::vector<View> m_views;
+    std::vector<RECT> m_monitorRects;   // scratch for enumeration
+
+    // Exit conditions. A screensaver has to be twitchy about real input and
+    // completely deaf to its own windows swapping focus during creation.
+    POINT m_firstMouse = {};
+    bool  m_mouseSeen = false;
+    DWORD m_startTick = 0;
+    static const int  kMouseThreshold = 5;
+    static const DWORD kInputGraceMs = 900;   // ignore input while windows settle
+
+    // A screensaver that pins a GPU overnight is antisocial in a way a game is
+    // not, so frames are capped rather than left to run at the refresh rate.
+    // Presenting every swap chain with SyncInterval 0 and pacing here also
+    // avoids serialising on several monitors' vblanks in turn.
+    static const int kTargetFps = 30;
+
+    // Signalled by a newly launched instance so a running preview releases its
+    // swap chain before the new one tries to create another on the same HWND.
+    HANDLE m_exitEvent = nullptr;
+};
