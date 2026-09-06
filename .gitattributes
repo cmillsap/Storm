@@ -1,0 +1,14 @@
+# Normalise text to LF in the repository; Git restores native endings on
+# checkout. Batch files are the exception - cmd.exe wants CRLF.
+* text=auto
+
+*.bat  text eol=crlf
+*.cpp  text
+*.h    text
+*.hlsl text
+*.hlsli text
+*.md   text
+*.ps1  text eol=crlf
+
+*.png binary
+*.bmp binary

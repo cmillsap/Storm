@@ -1,0 +1,27 @@
+# Build output. Each spike builds into its own build/ via build.bat, which also
+# copies dxcompiler.dll and dxil.dll out of the Windows SDK - none of that
+# belongs in history.
+build/
+*.obj
+*.exe
+*.dll
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.iobj
+*.ipdb
+
+# Visual Studio / MSBuild
+.vs/
+*.user
+*.suo
+*.vcxproj.user
+Debug/
+Release/
+x64/
+
+# Spike scratch output. Captures are written as BMP and promoted to PNG by
+# hand when they are worth keeping, so docs/*.png is deliberately tracked.
+*.bmp
+*.csv
