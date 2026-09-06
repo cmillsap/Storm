@@ -240,6 +240,16 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR commandLine, int)
         return App::captureFrame(w, h, t, tokens[1].c_str()) ? 0 : 1;
     }
 
+    if (command == L"/bench" || command == L"-bench")
+    {
+        // /bench <file.txt> [width height] [frames]
+        const wchar_t* out = (tokens.size() > 1) ? tokens[1].c_str() : L"storm-bench.txt";
+        const UINT w = (tokens.size() > 2) ? (UINT)_wtoi(tokens[2].c_str()) : 3440u;
+        const UINT h = (tokens.size() > 3) ? (UINT)_wtoi(tokens[3].c_str()) : 1440u;
+        const int  n = (tokens.size() > 4) ? _wtoi(tokens[4].c_str()) : 120;
+        return App::benchmark(w, h, n, out) ? 0 : 1;
+    }
+
     if (command == L"/probe" || command == L"-probe")
     {
         const wchar_t* out = (tokens.size() > 1) ? tokens[1].c_str() : L"storm-probe.txt";

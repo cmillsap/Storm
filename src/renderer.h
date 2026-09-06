@@ -1,32 +1,68 @@
 // Storm - the render passes.
 //
-// Phase 00 draws the sky and the ground only. The cloud volume, the simulation
-// and the temporal resolve arrive in Phases 01 and 02; the atmosphere here is
-// the real Rayleigh/Mie integral from the look spike, not a placeholder
-// gradient, so those phases extend this rather than replacing it.
+// Phase 01 frame, in order:
+//   light volume    sun transmittance through the cloud, at 64^3
+//   cloud march     half resolution, fixed stepping, one light-volume fetch
+//   temporal resolve  reproject and accumulate the jittered samples
+//   composite       full resolution sky, sun and ground, cloud composited over
+//   blit            per view, with that view's crop rectangle
 #pragma once
 
 #include "view.h"
 #include <vector>
 
-// Mirrors the cbuffer in sky.hlsl and blit.hlsl: 28 root constants. HLSL packs
-// float3 + float into one 16-byte row, so this is row-for-row identical.
+// Mirrors the cbuffer in common.hlsli. HLSL packs float3 + float into one
+// 16-byte row, so this is row-for-row identical.
 struct alignas(16) FrameConstants
 {
-    float camPos[3];      float time;
-    float camForward[3];  float tanHalfFov;
-    float camRight[3];    float aspect;
-    float camUp[3];       float exposure;
-    float outSize[2];     float texSize[2];
-    float sunDirection[3];float sunIntensity;
-    float cropScale[2];   float cropOffset[2];
-};
-static_assert(sizeof(FrameConstants) == 112, "FrameConstants must be 28 root constants");
+    float camPos[3];        float time;
+    float camForward[3];    float tanHalfFov;
+    float camRight[3];      float aspect;
+    float camUp[3];         float exposure;
 
-// Chooses the shared target's dimensions for a set of views. Separated from
-// allocation so the arithmetic can be checked without a graphics device - which
-// is the only way to test a mixed-monitor arrangement on a machine that has one
-// monitor.
+    float prevForward[3];   float prevTanHalfFov;
+    float prevRight[3];     float historyValid;
+    float prevUp[3];        float historyBlend;
+
+    float sunDirection[3];  float sunIntensity;
+    float cloudCentre[3];   float cloudRadius;
+
+    float fullSize[2];      float halfSize[2];
+    float jitter[2];        float pad0[2];
+
+    float cloudBottom;      float cloudTop;     float coverage;     float densityScale;
+    int32_t numSteps;       int32_t frameIndex; int32_t historyIndex; int32_t pad1;
+};
+static_assert(sizeof(FrameConstants) % 16 == 0, "FrameConstants must be 16-byte aligned");
+
+struct BlitConstants
+{
+    float cropScale[2];
+    float cropOffset[2];
+};
+
+// Descriptor table layout, fixed so the shaders can name registers directly.
+enum Slot
+{
+    kUavSharedTarget = 0,
+    kUavCloudCurrent,
+    kUavCloudHistory0,
+    kUavCloudHistory1,
+    kUavLightVolume,
+    kUavBaseNoise,
+    kUavDetailNoise,
+    kUavCount,
+
+    kSrvSharedTarget = kUavCount,
+    kSrvCloudCurrent,
+    kSrvCloudHistory0,
+    kSrvCloudHistory1,
+    kSrvLightVolume,
+    kSrvBaseNoise,
+    kSrvDetailNoise,
+    kSlotCount
+};
+
 void ComputeSharedTargetSize(const std::vector<View>& views, UINT& outWidth, UINT& outHeight);
 
 struct Renderer
@@ -34,27 +70,44 @@ struct Renderer
     Gpu* gpu = nullptr;
 
     ComPtr<ID3D12RootSignature> rootSignature;
-    ComPtr<ID3D12PipelineState> skyPso;
-    ComPtr<ID3D12PipelineState> blitPso;
+    ComPtr<ID3D12PipelineState> psoGenBase, psoGenDetail;
+    ComPtr<ID3D12PipelineState> psoLightVolume, psoCloud, psoResolve, psoComposite, psoBlit;
 
-    // Phase 00 renders exactly one target, mirrored everywhere. The vector is
-    // the seam: independent cameras become one target per view, and the frame
-    // loop below already iterates rather than assuming a single element.
+    // Phase 01 renders one target, mirrored everywhere. The vector is the seam
+    // for independent cameras later; the frame loop already iterates.
     std::vector<RenderTarget> targets;
+
+    ComPtr<ID3D12Resource> cloudCurrent;
+    ComPtr<ID3D12Resource> cloudHistory[2];
+    ComPtr<ID3D12Resource> lightVolume;
+    ComPtr<ID3D12Resource> baseNoise, detailNoise;
+    ComPtr<ID3D12Resource> constantBuffer;
+    uint8_t* constantsMapped = nullptr;
+
+    UINT halfWidth = 0, halfHeight = 0;
+    int  frameIndex = 0;
+    int  historyIndex = 0;
+    bool historyValid = false;
+    bool noiseReady = false;
 
     bool initialise(Gpu& g);
     void shutdown();
 
-    // Allocates the shared target. Sized so that every view gets at least its
-    // native pixel count after cropping: the tallest view sets the height and
-    // the widest aspect sets the width.
     bool createSharedTarget(const std::vector<View>& views);
-    bool createTarget(UINT width, UINT height);   // explicit size, used by capture
+    bool createTarget(UINT width, UINT height);
 
+    void generateNoise();                    // once, at startup
     void renderTargets(float timeSeconds);
-    void presentView(View& view, float timeSeconds);
-    void finishFrame();          // returns targets to UAV state for the next pass
+    void presentView(View& view);
+    void finishFrame();
 
 private:
-    void fillConstants(FrameConstants& c, const RenderTarget& target, float timeSeconds) const;
+    bool createCloudBuffers(UINT fullWidth, UINT fullHeight);
+    void fillConstants(FrameConstants& c, const RenderTarget& target, float timeSeconds);
+
+    // Previous frame's basis, kept so the resolve can reproject.
+    float m_prevForward[3] = { 0, 0, 1 };
+    float m_prevRight[3]   = { 1, 0, 0 };
+    float m_prevUp[3]      = { 0, 1, 0 };
+    float m_prevTanHalfFov = 1.0f;
 };

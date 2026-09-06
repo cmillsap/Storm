@@ -2,6 +2,11 @@
 // validated against a captured frame.
 // Nishita-style single-scattering atmosphere.
 //
+#ifndef STORM_ATMOSPHERE_HLSLI
+#define STORM_ATMOSPHERE_HLSLI
+
+#include "common.hlsli"   // kPi and the shared frame constants
+//
 // One function does all of it. Called with a huge distance it returns the sky;
 // called with the distance to a cloud sample or the ground it returns the
 // aerial perspective for that point. Using the same integral for both is what
@@ -15,7 +20,6 @@ static const float3 kBetaMie       = float3(21.0e-6, 21.0e-6, 21.0e-6);
 static const float  kScaleHeightR  = 7994.0;
 static const float  kScaleHeightM  = 1200.0;
 static const float  kMieG          = 0.76;
-static const float  kPi            = 3.14159265;
 
 static const int kViewSamples  = 24;
 static const int kLightSamples = 8;
@@ -134,3 +138,5 @@ float3 skyRadiance(float3 ro, float3 rd, float3 sunDir, float intensity)
 
     return inscatter;
 }
+
+#endif

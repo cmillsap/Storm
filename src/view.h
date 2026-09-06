@@ -13,10 +13,13 @@
 
 struct Camera
 {
+    // Framed on the cloud: a congestus spanning 1.1 to 6.6 km at 7 km out
+    // subtends roughly 9 to 43 degrees, so the pitch has to lift for the crown
+    // to stay in shot. A level camera with a wide field of view clips the top.
     float position[3] = { 0.0f, 60.0f, 0.0f };
     float yaw   = 0.0f;
-    float pitch = 0.06f;
-    float fovDegrees = 62.0f;
+    float pitch = 0.30f;
+    float fovDegrees = 55.0f;
 };
 
 // A render target shared by one or more views.

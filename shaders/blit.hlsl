@@ -5,19 +5,7 @@
 // the view takes the largest sub-rectangle of the target matching its own
 // aspect, so nothing is letterboxed and nothing is stretched.
 
-Texture2D<float4> gSource : register(t0);
-SamplerState      gClamp  : register(s0);
-
-cbuffer FrameConstants : register(b0)
-{
-    float3 gCamPos;       float gTime;
-    float3 gCamForward;   float gTanHalfFov;
-    float3 gCamRight;     float gAspect;
-    float3 gCamUp;        float gExposure;
-    float2 gOutSize;      float2 gTexSize;
-    float3 gSunDirection; float gSunIntensity;
-    float2 gCropScale;    float2 gCropOffset;
-};
+#include "common.hlsli"
 
 struct VSOut
 {
@@ -35,10 +23,5 @@ VSOut VSFullscreen(uint id : SV_VertexID)
 
 float4 PSBlit(VSOut i) : SV_Target
 {
-    // The rendered region may be smaller than the allocated texture, so the
-    // crop is applied in rendered-region space and then scaled into texture
-    // space. In Phase 00 the two are identical, but keeping the term means a
-    // quality tier that renders a sub-rect will not need this rewritten.
-    float2 uv = (i.uv * gCropScale + gCropOffset) * (gOutSize / gTexSize);
-    return gSource.SampleLevel(gClamp, uv, 0);
+    return gSharedSRV.SampleLevel(gClamp, i.uv * gCropScale + gCropOffset, 0);
 }

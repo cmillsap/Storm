@@ -1,5 +1,7 @@
 #include "app.h"
 
+#include "../resource.h"
+
 #include <windowsx.h>   // GET_X_LPARAM / GET_Y_LPARAM
 #include <algorithm>
 #include <cmath>
@@ -205,6 +207,7 @@ bool App::initialise(HINSTANCE instance, Mode mode, HWND previewWindow)
     if (!ok) return false;
 
     if (!m_renderer.createSharedTarget(m_views)) return false;
+    m_renderer.generateNoise();
 
     // Mirroring, stated once: every view presents the same target and shares
     // its camera. Independent cameras would give each view its own target here
@@ -252,7 +255,7 @@ int App::run()
 
         m_gpu.beginFrame();
         m_renderer.renderTargets(elapsed);
-        for (View& v : m_views) m_renderer.presentView(v, elapsed);
+        for (View& v : m_views) m_renderer.presentView(v);
         m_renderer.finishFrame();
         m_gpu.submitAndWait();
 
@@ -287,8 +290,25 @@ bool App::captureFrame(UINT width, UINT height, float atTime, const wchar_t* pat
     Renderer renderer;
     if (!renderer.initialise(gpu)) return false;
     if (!renderer.createTarget(width, height)) return false;
+    renderer.generateNoise();
 
     RenderTarget& target = renderer.targets[0];
+
+    // The temporal resolve accumulates jittered samples, so a single frame is
+    // noisier than what the screensaver actually shows. Run up to the requested
+    // moment at the real frame rate rather than holding time still: with a
+    // frozen camera the reprojection is an identity transform and a capture
+    // would prove nothing about it. Arriving with the camera in motion is what
+    // makes ghosting visible if it is there.
+    const int kSettleFrames = 30;
+    const float step = 1.0f / 30.0f;
+    for (int i = 0; i < kSettleFrames; ++i)
+    {
+        gpu.beginFrame();
+        renderer.renderTargets(atTime - (float)(kSettleFrames - 1 - i) * step);
+        renderer.finishFrame();
+        gpu.submitAndWait();
+    }
 
     D3D12_RESOURCE_DESC desc = target.texture->GetDesc();
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint = {};
@@ -370,6 +390,64 @@ bool App::captureFrame(UINT width, UINT height, float atTime, const wchar_t* pat
     WriteFile(file, &fh, sizeof(fh), &written, nullptr);
     WriteFile(file, &ih, sizeof(ih), &written, nullptr);
     WriteFile(file, image.data(), (DWORD)image.size(), &written, nullptr);
+    CloseHandle(file);
+
+    gpu.shutdown();
+    renderer.shutdown();
+    return true;
+}
+
+bool App::benchmark(UINT width, UINT height, int frames, const wchar_t* path)
+{
+    Gpu gpu;
+    if (!gpu.initialise(false)) { FailHard("No Direct3D 12 capable adapter found."); return false; }
+
+    Renderer renderer;
+    if (!renderer.initialise(gpu)) return false;
+    if (!renderer.createTarget(width, height)) return false;
+    renderer.generateNoise();
+
+    auto timeFrames = [&](int count) -> double
+    {
+        LARGE_INTEGER frequency, start, end;
+        QueryPerformanceFrequency(&frequency);
+        QueryPerformanceCounter(&start);
+        for (int i = 0; i < count; ++i)
+        {
+            gpu.beginFrame();
+            renderer.renderTargets(1.0f + (float)i * 0.033f);
+            renderer.finishFrame();
+            gpu.submitAndWait();
+        }
+        QueryPerformanceCounter(&end);
+        return (double)(end.QuadPart - start.QuadPart) * 1000.0
+             / (double)frequency.QuadPart / (double)count;
+    };
+
+    timeFrames(12);                       // warm up
+    const double ms = timeFrames(frames);
+
+    char report[1024];
+    const int written = std::snprintf(report, sizeof(report),
+        "Storm " STORM_VERSION_ASCII " - render benchmark\n"
+        "======================================\n\n"
+        "device        %s\n"
+        "output        %ux%u\n"
+        "cloud march   %ux%u (half resolution)\n"
+        "frames        %d\n\n"
+        "frame         %.2f ms  (%.0f fps uncapped)\n"
+        "budget        %.0f%% of a 30 fps frame, %.0f%% of a 60 fps frame\n\n"
+        "Includes the light volume rebuild, the cloud march, the temporal\n"
+        "resolve and the full-resolution composite. Excludes present.\n",
+        Narrow(gpu.adapterName.c_str()).c_str(),
+        width, height, renderer.halfWidth, renderer.halfHeight, frames,
+        ms, 1000.0 / ms, ms / 33.3 * 100.0, ms / 16.7 * 100.0);
+
+    HANDLE file = CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                              FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return false;
+    DWORD bytes = 0;
+    WriteFile(file, report, (DWORD)written, &bytes, nullptr);
     CloseHandle(file);
 
     gpu.shutdown();

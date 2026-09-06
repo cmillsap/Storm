@@ -24,6 +24,11 @@ public:
     // way to catch a renderer that is fast and wrong.
     static bool captureFrame(UINT width, UINT height, float atTime, const wchar_t* path);
 
+    // Times the render pipeline with no window and no present. Wall clock
+    // around a fully synchronised frame, so it is an upper bound that includes
+    // CPU submission - every phase from here on wants this number.
+    static bool benchmark(UINT width, UINT height, int frames, const wchar_t* path);
+
 private:
     static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
     static BOOL CALLBACK MonitorCallback(HMONITOR monitor, HDC, LPRECT rect, LPARAM param);

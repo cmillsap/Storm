@@ -6,10 +6,11 @@ supercell, and drops a tornado out of it — with a different storm every run.
 Direct3D 12, compute-shader volumetric rendering. Screensaver shell modelled on
 [cmillsap/Juggler](https://github.com/cmillsap/Juggler).
 
-**Status: Phase 00 complete.** `Storm.scr` builds, installs and runs; the four
-validation spikes that preceded it are kept under `spikes/`.
+**Status: Phase 01 complete.** `Storm.scr` builds, installs and runs, and draws
+a volumetric cloud. The four validation spikes that preceded it are kept under
+`spikes/`.
 
-![Phase 00: the sky at the low end of the sun cycle](docs/phase00-sky.png)
+![Phase 01: a raymarched cumulus congestus](docs/phase01-cloud.png)
 
 ## Building and running
 
@@ -39,7 +40,12 @@ the image is the only way to catch a renderer that is fast and wrong.
 |---|---|
 | `/w` | Run in an ordinary window rather than full screen |
 | `/capture <file.bmp> [w h] [seconds]` | Render one frame to disk |
+| `/bench [file.txt] [w h] [frames]` | Time the render pipeline |
 | `/probe [file.txt]` | Report the monitor layout and the mirroring arithmetic |
+
+`/capture` runs up to the requested moment at the real frame rate rather than
+holding time still — with a frozen camera the temporal reprojection is an
+identity transform and the capture would prove nothing about it.
 
 Note that `.scr` files have a shell association whose default verb is *Install*,
 so launching one from a script needs `UseShellExecute = false` or it will not
@@ -58,6 +64,34 @@ run the way you expect.
   a five-minute arc, rather than a placeholder gradient. Phase 01 adds a cloud
   march to this rather than replacing it.
 - Frames capped at 30 fps; measured at roughly 6% of one CPU core.
+
+## Phase 01 — volumetric raymarcher
+
+The Spike 02 cumulus, at target resolution, temporally resolved.
+
+- **Cloud march at half resolution**, fixed stepping, ~96 steps. Adaptive
+  empty-space skipping is deliberately absent: Spike 01 measured it at 2.7×
+  *slower* inside a bounded volume.
+- **Sun transmittance from a precomputed 64³ volume**, rebuilt each frame, not
+  a per-sample cone march. Spike 01 measured that swap at 2.28× faster with a
+  maximum image error of 4/255. The same volume shadows the ground for free.
+- **Temporal resolve** — the one part no spike built. The primary ray is
+  jittered on a Halton sequence each frame and accumulated, so a cheap march
+  still resolves clean. Reprojection goes through the world-space ray
+  direction rather than a screen-space motion vector: the camera rotates
+  without translating, which makes it exact and depth-independent, and a
+  volumetric buffer has no single depth to reproject by anyway. Neighbourhood
+  clamping keeps stale history from smearing.
+- **Full-resolution composite** — sky, sun and ground stay sharp; only the
+  cloud is half resolution, which it can afford to be.
+
+**3.32 ms per frame at 3440×1440** on an RTX 5060 Ti — 10% of a 30 fps frame —
+including the light volume rebuild, the march, the resolve and the composite.
+
+Known limits: reprojection assumes the camera does not translate, which holds
+until the camera system in Phase 05; it will need the cloud's mean distance
+carried alongside the colour. Nothing in the cloud is simulated yet — the shape
+is the analytic container from Spike 02, and Phase 02 replaces it with a volume.
 
 
 
@@ -166,8 +200,13 @@ src/                     the screensaver itself
   renderer.h/.cpp        shared render target and the passes over it
   gpu.h/.cpp             D3D12 device, descriptor heaps, runtime shader compilation
 shaders/
+  common.hlsli           frame constants and bindings, included everywhere
   atmosphere.hlsli       Rayleigh/Mie scattering, shared by sky and aerial perspective
-  sky.hlsl               Phase 00 sky and ground
+  clouds.hlsli           cloud density, shape and lighting constants
+  noise_gen.hlsl         tileable Perlin-Worley and Worley volumes
+  cloud.hlsl             light volume build and the cloud march
+  resolve.hlsl           temporal reprojection and accumulation
+  composite.hlsl         full-resolution sky, ground and cloud composite
   blit.hlsl              presentation blit with the crop rectangle
 
 spikes/01-perf/          what a raymarch step costs
