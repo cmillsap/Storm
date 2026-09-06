@@ -6,12 +6,14 @@ supercell, and drops a tornado out of it — with a different storm every run.
 Direct3D 12, compute-shader volumetric rendering. Screensaver shell modelled on
 [cmillsap/Juggler](https://github.com/cmillsap/Juggler).
 
-**Status: Phase 03 complete.** `Storm.scr` builds, installs and runs, and plays
-the storm arc: a flat-based cumulus becomes a congestus, the cap erodes, and a
-tilted cumulonimbus drops a rain shaft and throws lightning around inside
-itself. The four validation spikes that preceded it are kept under `spikes/`.
+**Status: Phase 04 complete.** `Storm.scr` builds, installs and runs, and plays
+the whole storm: a flat-based cumulus becomes a congestus, the cap erodes, a
+tilted cumulonimbus throws lightning and drops a rain shaft, a directed
+mesocyclone lets it carry supercell shear, and a tornado comes down out of the
+wall cloud. The four validation spikes that preceded it are kept under
+`spikes/`.
 
-![Phase 03: a sheared cumulonimbus with its rain shaft](docs/phase03-storm.png)
+![Phase 04: a sheared supercell with its anvil, wall cloud and tornado](docs/phase04-supercell.png)
 
 ## Building and running
 
@@ -40,19 +42,32 @@ the image is the only way to catch a renderer that is fast and wrong.
 | | |
 |---|---|
 | `/w` | Run in an ordinary window rather than full screen |
-| `/capture <file.bmp> [w h] [seconds]` | Render one frame to disk |
+| `/capture <file.bmp> [w h] [seconds] [distance] [aim]` | Render one frame to disk |
 | `/slice <file.bmp> [w h] [seconds]` | Draw the simulation fields on a vertical plane |
-| `/arc [file.csv] [storm s] [interval] [EL m]` | Run the storm headless and measure it |
+| `/arc [file.csv] [storm s] [interval] [EL m] [rotation] [shear]` | Run the storm headless and measure it |
 | `/bench [file.txt] [w h] [frames] [warm-up s]` | Time the render pipeline |
 | `/probe [file.txt]` | Report the monitor layout and the mirroring arithmetic |
 
 `/arc` and `/slice` are Phase 03's, and between them they are why that phase
 landed. `/arc` runs the solver with no window and no render passes and writes a
 row per interval of storm time - cloud base and top, peak updraft and
-downdraft, condensate and rain, cloud radius - plus a second file giving peak
-condensate and cloudy-cell count in each of 32 height bands. `/slice` draws the
+downdraft, condensate and rain, cloud radius, and from Phase 04 the
+updraft-vorticity correlation and peak vorticity - plus a second file giving
+peak condensate and cloudy-cell count in each of 32 height bands. `/slice` draws the
 fields themselves rather than the sky. Almost every wrong turn below was found
 in one of those two and would not have been visible in a screenshot.
+
+`/capture`'s optional `distance` stands the camera that many metres off the
+storm on its inflow side and re-aims it, instead of the shipped 18 km. It is
+development only — the camera that ships is Phase 05's — but a tornado is two
+degrees wide from 18 km, and there is no tuning something you cannot see.
+
+Set **`STORM_QUIET`** in the environment when driving any of these from a
+script. Fatal errors normally report through a message box, which is right when
+Windows launches the screensaver and has no console to print to, and exactly
+wrong for a script: a modal dialog nobody clicks leaves the process alive and
+holding the GPU. With `STORM_QUIET` set the dialog is skipped; either way the
+message is written to `storm-error.txt`.
 
 `/capture` runs up to the requested moment at the real frame rate rather than
 holding time still — with a frozen camera the temporal reprojection is an
@@ -344,6 +359,150 @@ schedule. Phase 03 ships the 2 m/s per km the storm survives without help;
 Phase 04 raises it once the mesocyclone is there to hold it together.
 
 
+## Phase 04 — supercell and tornado
+
+The storm rotates, and something comes out of the bottom of it. Rotation is
+directed rather than waited for, steered on the one number Spike 04 said to
+steer on; the shear goes up to a real supercell value because the rotation is
+what pays for it; and the funnel, the wall cloud, the debris cloud and the
+rear-flank clear slot are authored, because the spike measured that imposed
+swirl produces none of them.
+
+![Phase 04: the wall cloud, funnel and debris cloud from four kilometres](docs/phase04-tornado.png)
+
+- **Directed rotation**, as a target swirl about the storm's axis with only the
+  *tangential* component steered — so the inflow and outflow through the same
+  region are left alone. Rankine profile, 1.8 km core, on an axis that leans
+  downstream with the tower.
+- **Steered on the updraft–vorticity correlation.** The `/arc` harness now
+  reduces the Pearson correlation between vertical velocity and vertical
+  vorticity through the storm layer, and reports peak vorticity beside it
+  precisely because that is the number *not* to use.
+- **4.0 m/s per km of shear**, twice what Phase 03 could carry.
+- **An analytic funnel**, with a wall cloud above it and a debris cloud where
+  it meets the ground, on a life cycle that descends, holds and ropes out.
+- **The RFD clear slot and the vault**, authored, without which the tornado
+  hangs inside opaque precipitation and cannot be seen at all.
+- **Mammatus**, as a displacement of the sample coordinate inside the ice.
+- **Rain given its own optics**, which turned out to matter more than anything
+  else in this list.
+
+**11.57 ms per frame at 3440×1440** on an RTX 5060 Ti — 35% of a 30 fps frame,
+measured on a mature storm. Phase 03's 8.96 ms bought the funnel, the clear
+slot, the mammatus displacement and a considerably larger storm.
+
+### What the rotation buys
+
+This is the whole argument of the phase, and it is Spike 04's claim reproduced
+in the production solver. Cloud top and peak updraft against the 0–6 km shear,
+with the mesocyclone off and on:
+
+| 0–6 km shear | 2.0 | 3.0 | 4.0 | 5.0 m/s/km |
+|---|---|---|---|---|
+| **cloud top, no rotation** | 9765 | 8775 | 8235 | 6885 m |
+| **cloud top, rotating** | 11475 | 11385 | 11205 | 10665 m |
+| **peak updraft, no rotation** | 54.0 | 43.5 | 41.5 | 33.1 m/s |
+| **peak updraft, rotating** | 64.6 | 63.7 | 58.2 | 52.5 m/s |
+
+Unrotated, the storm loses 30% of its depth and 39% of its updraft across that
+range — which is exactly why Phase 03 shipped 2.0 m/s/km and said so. Rotating,
+it loses 7% and 19%. The shipped sounding takes the shear to 4.0.
+
+### Steering on the correlation
+
+Rotation asked for, against what arrives:
+
+| target swirl | 0 | 10 | 20 | 30 | 40 m/s |
+|---|---|---|---|---|---|
+| **w–ζ correlation** | 0.01 | 0.10 | 0.36 | 0.62 | 0.51 |
+| **peak vorticity** | 0.085 | 0.054 | 0.044 | 0.049 | 0.061 s⁻¹ |
+| **cloud top** | 9765 | 11295 | 11475 | 11565 | 11565 m |
+
+The correlation is monotonic and directable up to 30 m/s and then saturates —
+close to the spike's 0.28 → 0.79 → 0.84. **Peak vorticity is not monotonic in
+anything**, and at zero rotation it is at its highest: with no mesocyclone at
+all the largest vorticity in the domain is 0.085 s⁻¹ of small-scale shear.
+Steering on it would have driven the rotation in exactly the wrong direction,
+which is what Spike 04 was warning about.
+
+### Six findings
+
+- **The sign of the rotation is not a coin toss.** Vertical vorticity here is
+  ζ = ∂u/∂z − ∂w/∂x, so solid-body rotation about +y — counter-clockwise seen
+  from above, which is what a Northern Hemisphere supercell does — has velocity
+  along (dz, −dx). Written the other way the storm is anticyclonic, and the
+  correlation runs monotonically *negative*: the magnitude tracked the rotation
+  asked for perfectly while the sign was upside down, which is how it was
+  caught and would never have been caught by looking.
+- **Confining the swirl is geometry, and gating it on cloud is worse than the
+  disease.** A 2.6 km core faded out to 8.8 km covers most of the domain, and a
+  rotating column that wide drags a broad layer up under it: 1.5 million cloudy
+  cells out of 5.7 million. The obvious repair — only rotate where there is
+  already cloud — leaves the swirl unable to organise the inflow that feeds the
+  storm, and all it then does is shred what it is applied to: the correlation
+  stalled at 0.21, peak vorticity climbed as the small scales tore up, and
+  cloud top *fell* from 10.8 km to 8.4 km as the rotation was raised. A
+  mesocyclone is two to four kilometres across; confining it to that is all it
+  needs.
+- **Rain has to be optically thin, and this was the single largest improvement
+  in the phase.** Extinction goes as total cross-section, which for fixed mass
+  goes as 1/radius — a millimetre raindrop is a hundred times a cloud droplet,
+  so the same water as rain blocks a small fraction of what it blocks as cloud.
+  Treating them alike made the storm's lower half an opaque wall for kilometres
+  in every direction; from 4 km away the view was a flat grey field with the
+  tornado somewhere inside it. It is also what made the storm read as a dark
+  mass rather than as a cumulonimbus.
+- **The clear slot has to exist, and it has to not delete the tornado.** With
+  the vault authored, the air under the mesocyclone has no cloud and no rain —
+  so `sampleDensityAndRain` took its "nothing here" early-out and returned
+  before the funnel was folded in. The tornado rendered as a two-hundred-metre
+  stub of wall cloud with nothing below it, in the one place it was guaranteed
+  to be invisible. Every early-out in that function now lets the funnel past.
+- **A rotating updraft sustains itself on much less forcing.** The forcing
+  radius came down from 1800 m to 1200 m and the heating with it, and the storm
+  is deeper than before. That is what makes the anvil read: an anvil only looks
+  like an anvil when it is wider than the tower feeding it, the domain caps how
+  wide the anvil can get, so the tower is what has to give.
+- **The anvil arrived as a side effect.** Phase 03 could not get the cloud's
+  widest point up to the cap and said so. With the mesocyclone directed, the
+  band profile puts the maximum at 8.3–9.2 km, immediately under the 9.2 km
+  equilibrium level — the shape Phase 03 was reaching for, produced by
+  something that was not aimed at it.
+
+### Two bugs worth remembering
+
+- **A modal dialog with nobody to click it holds the GPU.** `FailHard` reports
+  through a message box, which is right when Windows launches the screensaver
+  and there is no console. Run from a script it is exactly wrong: a shader
+  compile error left a process alive and holding the device, a second one
+  joined it, and for the better part of an hour every capture and benchmark
+  after that was contending with two stuck processes — captures that should
+  take 17 seconds took over ten minutes, then failed, inconsistently. The
+  underlying error was one undeclared identifier. Fatal errors now also write
+  `storm-error.txt`, and `STORM_QUIET` suppresses the dialog for anything
+  headless. Worth the embarrassment: the symptom looked exactly like a
+  performance cliff, and was diagnosed as one twice.
+- **Fixed-point sums must round, not truncate.** The correlation is built from
+  raw moments accumulated through `InterlockedAdd`, and every term is a `uint`
+  cast that rounds toward zero — so each of 300,000 cells lost up to a whole
+  unit in the same direction. The bias buried the moments completely and the
+  first reading was a Pearson correlation of −23.2, which is not a value a
+  correlation can take. Adding a half before the cast makes the error
+  zero-mean; sampling every fourth cell rather than every second leaves the
+  headroom to make the units small enough that what remains is noise.
+
+Known limits: **the tornado is only properly legible from close to.** It is
+680 m across, which from the shipped camera's 18 km is two degrees — honest,
+and too small to be the subject of a screensaver. It reads at that distance as
+a dark thread with a debris cloud, and the image above is from four kilometres
+through the development camera override. The camera that pushes in for the
+tornado act is Phase 05's, and this is now the strongest argument for it. The
+debris cloud is also smoother than dust should be, there is no hook echo in the
+precipitation field — the clear slot is carved out of the rain rather than the
+rain being wrapped into a hook — and the anvil is still limited by the domain
+width in the way Phase 03 described.
+
+
 ## Spikes
 
 Four spikes were run before committing to the build, each retiring a specific
@@ -453,10 +612,11 @@ src/                     the screensaver itself
 shaders/
   common.hlsli           frame constants and bindings, included everywhere
   atmosphere.hlsli       Rayleigh/Mie scattering, shared by sky and aerial perspective
-  clouds.hlsli           cloud density, shape and lighting constants
+  clouds.hlsli           cloud density, shape and lighting; the tornado,
+                         the wall cloud and the rear-flank clear slot
   sim.hlsli              the staggered grid, the sounding, and how to sample both
   sim.hlsl               advect, force, buoyancy, condense, precipitate,
-                         damp, project, and the /arc diagnostics
+                         rotate, damp, project, and the /arc diagnostics
   noise_gen.hlsl         tileable Perlin-Worley and Worley volumes
   cloud.hlsl             light volume build and the cloud march
   resolve.hlsl           temporal reprojection and accumulation

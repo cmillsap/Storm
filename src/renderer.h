@@ -37,6 +37,21 @@ struct alignas(16) FrameConstants
 
     // Lightning. One flash at a time, as a point light inside the cloud.
     float flashPosition[3]; float flashIntensity;
+
+    // The tornado. Analytic rather than simulated, because at 90 m cells a
+    // funnel is five cells across and the solver has nothing to say about it -
+    // Spike 04 established that the asymmetric structure has to be authored,
+    // and the funnel is the most authored part of all. Driven by the arc, so
+    // it descends out of a storm that has a mesocyclone rather than appearing
+    // beside one.
+    float tornadoAxis[3];   float tornadoTilt;      // ground point, lean per metre
+    float tornadoTop;       float tornadoDescent;   // funnel top, how far the tip has come down
+    float tornadoRadius;    float tornadoIntensity;
+    float tornadoSwirl;     float debrisHeight;     // accumulated rotation angle
+    float debrisRadius;     float wallRadius;
+    float wallDrop;         float slotAzimuth;      // the RFD clear slot
+    float slotWidth;        float slotRadius;
+    float slotTop;          float slotStrength;     float pad1[2];
 };
 static_assert(sizeof(FrameConstants) % 16 == 0, "FrameConstants must be 16-byte aligned");
 

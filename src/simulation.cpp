@@ -166,8 +166,8 @@ void Simulation::shutdown()
 
 // ---- diagnostics ----------------------------------------------------------
 
-// Eight scalars, then a 32-band peak profile, then a 32-band sum profile.
-static const UINT kStatsSlots = 8 + 2 * SimStats::kBands;
+// Eight scalars, two 32-band profiles, then seven mesocyclone moments.
+static const UINT kStatsSlots = 8 + 2 * SimStats::kBands + 7;
 
 void Simulation::createStatsBuffers()
 {
@@ -258,6 +258,37 @@ SimStats Simulation::fetchStats() const
         out.cellsByBand[b] = (float)raw[8 + SimStats::kBands + b];
     }
 
+    // The mesocyclone. Undo the bias-and-scale encoding the reduction had to
+    // use - there is no float atomic in cs_6_0 - and form the Pearson
+    // correlation from the raw moments.
+    {
+        const uint32_t* m = raw + 72;
+        const double n = (double)m[0];
+        out.peakVorticity = (float)m[6] / 1.0e5f;
+        if (n > 100.0)
+        {
+            const double sw  = (double)m[1] / 64.0   - n * 50.0;
+            const double sz  = (double)m[2] / 1.0e5  - n * 0.1;
+            const double sw2 = (double)m[3] / 4.0;
+            const double sz2 = (double)m[4] / 1.0e6;
+            const double swz = (double)m[5] / 2000.0 - n * 8.0;
+
+            const double covariance = swz - sw * sz / n;
+            const double varW = sw2 - sw * sw / n;
+            const double varZ = sz2 - sz * sz / n;
+
+            // Clamped, and deliberately so. The moments are quantised
+            // independently, so nothing guarantees the ratio lands inside the
+            // range a correlation is allowed to occupy - and a value outside
+            // it should read as the noise it is, not as a bigger number.
+            if (varW > 1.0e-6 && varZ > 1.0e-12)
+            {
+                const double r = covariance / std::sqrt(varW * varZ);
+                out.updraftVorticityCorrelation = (float)(std::max)(-1.0, (std::min)(1.0, r));
+            }
+        }
+    }
+
     D3D12_RANGE nothing = { 0, 0 };
     statsReadback->Unmap(0, &nothing);
     return out;
@@ -300,6 +331,38 @@ float StormArc::ramp(float stormTime) const
 float StormArc::strength(float stormTime, float soundingStrength) const
 {
     return soundingStrength * (1.0f - SmoothStep(cumulus, mature, stormTime));
+}
+
+// Rotation arrives with the congestus and is fully established by the time the
+// tower reaches the cap, then holds until the storm is well into its decay.
+float StormArc::rotation(float stormTime) const
+{
+    const float fading = mature + sustain + decay * 0.7f;
+    return SmoothStep(cumulus, mature, stormTime)
+         * (1.0f - SmoothStep(mature + sustain, fading, stormTime));
+}
+
+// The funnel comes down after the mesocyclone is established, holds, and then
+// ropes out. Descent and intensity are deliberately different shapes: a
+// tornado is at full strength while it is still descending, and it dies by
+// thinning rather than by rising back into the cloud.
+static float FunnelStart(const StormArc& arc)
+{
+    return arc.mature + arc.sustain * arc.tornadoOnset;
+}
+
+float StormArc::funnelDescent(float stormTime) const
+{
+    const float start = FunnelStart(*this);
+    return SmoothStep(start, start + tornadoDescend, stormTime);
+}
+
+float StormArc::funnelIntensity(float stormTime) const
+{
+    const float start = FunnelStart(*this);
+    const float ropeFrom = start + tornadoDescend + tornadoHold;
+    return SmoothStep(start, start + tornadoDescend * 0.45f, stormTime)
+         * (1.0f - SmoothStep(ropeFrom, ropeFrom + tornadoRope, stormTime));
 }
 
 float StormArc::cap(float stormTime, float soundingEquilibrium) const
@@ -376,7 +439,14 @@ void Simulation::fillConstants(SimConstants& c) const
     c.accretionRate   = sounding.accretionRate;
     c.rainEvaporation = sounding.rainEvaporation;
     c.rainOpaque      = sounding.rainOpaque;
-    c.pad0 = 0.0f;
+
+    c.rotationSpeed  = sounding.rotationSpeed * arc.rotation(simulatedTime);
+    c.rotationRadius = sounding.rotationRadius;
+    c.rotationBase   = sounding.rotationBase;
+    c.rotationTop    = sounding.rotationTop;
+    c.rotationRate   = sounding.rotationRate;
+    c.rotationTilt   = sounding.rotationTilt;
+    c.pad0[0] = c.pad0[1] = c.pad0[2] = 0.0f;
 
     // What reads as opaque, as a fraction of the local peak. See sampleDensity
     // for why it has to be local: Phase 02's single constant was tuned against

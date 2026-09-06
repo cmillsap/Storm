@@ -399,8 +399,51 @@ void CSDamp(uint3 tid : SV_DispatchThreadID)
     float aWind = saturate(a + gWindRelaxation * gSimDt * (1.0 - cloudy));
     if (c.y < gSimRes.y)
     {
-        writeU(c, lerp(readUDst(c), wind.x, aWind));
-        writeW(c, lerp(readWDst(c), wind.y, aWind));
+        float u = lerp(readUDst(c), wind.x, aWind);
+        float wHoriz = lerp(readWDst(c), wind.y, aWind);
+
+        // ---- the mesocyclone
+        //
+        // Only the tangential component is steered. The obvious thing - relax
+        // the horizontal velocity toward "environment plus swirl" - also
+        // erases the storm's inflow and outflow through the very region the
+        // mesocyclone occupies, which is where the storm does its breathing.
+        // Decomposing first costs the four-point average of the other
+        // component at each face and leaves everything but the rotation alone.
+        float aRot = saturate(gRotationRate * gSimDt);
+        if (gRotationSpeed > 0.0 && aRot > 0.0)
+        {
+            int xm1 = (c.x - 1 + gSimRes.x) % gSimRes.x;
+            int zp1 = (c.z + 1) % gSimRes.z;
+            int xp1 = (c.x + 1) % gSimRes.x;
+
+            // u face, at (i, j+0.5, k+0.5). w there is the average of four.
+            {
+                float3 pu = gSimOrigin + float3(c.x, c.y + 0.5, c.z + 0.5) * gSimCell;
+                float wAt = 0.25 * (readWDst(c) + readWDst(int3(xm1, c.y, c.z))
+                                  + readWDst(int3(c.x, c.y, zp1))
+                                  + readWDst(int3(xm1, c.y, zp1)));
+                float2 tangent;
+                float  target = rotationTarget(pu, tangent);
+                float  along  = u * tangent.x + wAt * tangent.y;
+                u += tangent.x * (target - along) * aRot;
+            }
+            // w face, at (i+0.5, j+0.5, k).
+            {
+                float3 pw = gSimOrigin + float3(c.x + 0.5, c.y + 0.5, c.z) * gSimCell;
+                int zm1 = (c.z - 1 + gSimRes.z) % gSimRes.z;
+                float uAt = 0.25 * (readUDst(c) + readUDst(int3(xp1, c.y, c.z))
+                                  + readUDst(int3(c.x, c.y, zm1))
+                                  + readUDst(int3(xp1, c.y, zm1)));
+                float2 tangent;
+                float  target = rotationTarget(pw, tangent);
+                float  along  = uAt * tangent.x + wHoriz * tangent.y;
+                wHoriz += tangent.y * (target - along) * aRot;
+            }
+        }
+
+        writeU(c, u);
+        writeW(c, wHoriz);
 
         float4 s = readSDst(c);
 
@@ -447,12 +490,48 @@ static const uint kStatsBands = 32;
 static const uint kStatsPeak  = 8;                   // 8  .. 39  peak condensate
 static const uint kStatsCells = 8 + kStatsBands;     // 40 .. 71  cloudy cells, ie. area
 
+// 72 .. 78: the mesocyclone. Spike 04's instruction, and the reason this block
+// exists at all: steer the rotation on the correlation between vertical
+// velocity and vertical vorticity, NOT on peak vorticity. Peak vorticity is
+// non-monotonic in the rotation asked for and picks up unrelated small-scale
+// shear; the correlation rose 0.28 -> 0.79 -> 0.84 across the spike's three
+// settings. A rotating updraft is by definition w and zeta in the same place,
+// so the correlation is the only number that says whether the swirl being
+// imposed has actually become a mesocyclone.
+static const uint kStatsMeso  = 72;                  // n, sums, then peak |zeta|
+
+// Fixed-point scales, and every one of them had to be earned twice: once so
+// the largest plausible total still fits in 32 bits, and once so the *rounding*
+// is fine enough to be worth summing.
+//
+// Truncation is the trap. Every one of these terms is a (uint) cast, which
+// rounds toward zero, so each cell loses up to a whole unit in the same
+// direction - and over the sample that systematic bias buried the moments
+// completely: the first version of this reported a Pearson correlation of
+// -23.2, which is not a number a correlation can take. Adding a half before
+// the cast makes the error zero-mean, and sampling every fourth cell rather
+// than every second leaves the headroom to make the units small enough that
+// what remains is noise rather than bias.
+static const uint  kMesoStride = 4;
+static const float kMesoWBias = 50.0,  kMesoWScale = 64.0;
+static const float kMesoZBias = 0.1,   kMesoZScale = 1.0e5;
+static const float kMesoW2Scale = 4.0, kMesoZ2Scale = 1.0e6;
+static const float kMesoWZBias = 8.0,  kMesoWZScale = 2000.0;
+
+// Round-to-nearest, saturating. The saturation matters as much as the
+// rounding: a single cell that runs past the encoding wraps the sum.
+uint fixedPoint(float value, float scale, float maxValue)
+{
+    return (uint)(clamp(value, 0.0, maxValue) * scale + 0.5);
+}
+
 uint bandOf(int y) { return (uint)clamp(y * (int)kStatsBands / gSimRes.y, 0, (int)kStatsBands - 1); }
 
 [numthreads(64, 1, 1)]
 void CSStatsClear(uint3 tid : SV_DispatchThreadID)
 {
     if (tid.x < 2 * kStatsBands) { gSimStats[kStatsPeak + tid.x] = 0; }
+    if (tid.x < 7)               { gSimStats[kStatsMeso + tid.x] = 0; }
     if (tid.x > 0) return;
 
     gSimStats[0] = 0;            // cloud top    - max
@@ -473,6 +552,8 @@ void CSStats(uint3 tid : SV_DispatchThreadID)
 
     float4 s = readSCurrent(c);
 
+    float3 p = gSimOrigin + (float3(c) + 0.5) * gSimCell;
+
     // Vertical velocity at the cell centre, from the two faces.
     float w = 0.5 * (readVCurrent(c) + readVCurrent(int3(c.x, c.y + 1, c.z)));
     uint wFixed = (uint)clamp((w + 100.0) * 100.0, 0.0, 40000.0);
@@ -485,7 +566,6 @@ void CSStats(uint3 tid : SV_DispatchThreadID)
         InterlockedMax(gSimStats[0], (uint)(c.y + 1));
         InterlockedMin(gSimStats[1], (uint)(c.y + 1));
 
-        float3 p = gSimOrigin + (float3(c) + 0.5) * gSimCell;
         float2 d = p.xz - gForceCentre.xz;
         InterlockedMax(gSimStats[6], (uint)length(d));
 
@@ -502,4 +582,32 @@ void CSStats(uint3 tid : SV_DispatchThreadID)
     uint band = bandOf(c.y);
     InterlockedMax(gSimStats[kStatsPeak + band], (uint)(max(s.b, 0.0) * 1.0e6));
     if (s.b > kCloudyQc) InterlockedAdd(gSimStats[kStatsCells + band], 1u);
+
+    // ---- the mesocyclone
+    //
+    // Vertical vorticity about the vertical axis, which here is y:
+    //   zeta = du/dz - dw/dx
+    // Centred differences on the cell-centred averages of the face values.
+    // Only the storm layer, and only every second cell in each axis - an
+    // eighth of the domain. A correlation does not need every cell, and the
+    // sums have to stay inside 32 bits.
+    if ((c.x % kMesoStride) | (c.y % kMesoStride) | (c.z % kMesoStride)) return;
+    if (p.y < 1000.0 || p.y > 7000.0) return;
+
+    int3 xm = wrapCell(int3(c.x - 1, c.y, c.z));
+    int3 xp = wrapCell(int3(c.x + 1, c.y, c.z));
+    int3 zm = wrapCell(int3(c.x, c.y, c.z - 1));
+    int3 zp = wrapCell(int3(c.x, c.y, c.z + 1));
+
+    float dudz = (centreU(zp) - centreU(zm)) / (2.0 * gSimCell);
+    float dwdx = (centreW(xp) - centreW(xm)) / (2.0 * gSimCell);
+    float zeta = dudz - dwdx;
+
+    InterlockedAdd(gSimStats[kStatsMeso + 0], 1u);
+    InterlockedAdd(gSimStats[kStatsMeso + 1], fixedPoint(w + kMesoWBias,      kMesoWScale,  120.0));
+    InterlockedAdd(gSimStats[kStatsMeso + 2], fixedPoint(zeta + kMesoZBias,   kMesoZScale,  0.2));
+    InterlockedAdd(gSimStats[kStatsMeso + 3], fixedPoint(w * w,               kMesoW2Scale, 14400.0));
+    InterlockedAdd(gSimStats[kStatsMeso + 4], fixedPoint(zeta * zeta,         kMesoZ2Scale, 0.01));
+    InterlockedAdd(gSimStats[kStatsMeso + 5], fixedPoint(w * zeta + kMesoWZBias, kMesoWZScale, 16.0));
+    InterlockedMax(gSimStats[kStatsMeso + 6], (uint)(abs(zeta) * 1.0e5));
 }

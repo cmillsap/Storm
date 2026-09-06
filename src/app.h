@@ -22,8 +22,13 @@ public:
     // takes over the display, which makes it almost impossible to inspect while
     // developing; the spikes established that looking at the image is the only
     // way to catch a renderer that is fast and wrong.
+    // distance, when positive, moves the camera that many metres from the
+    // storm axis instead of the shipped 18 km and re-aims it. Development
+    // only: the camera that ships is Phase 05's, and a tornado is two degrees
+    // wide from 18 km, which is honest and useless for looking at one.
     static bool captureFrame(UINT width, UINT height, float atTime, const wchar_t* path,
-                             bool crossSection = false);
+                             bool crossSection = false, float distance = 0.0f,
+                             float aimHeight = 0.0f);
 
     // Runs the simulation headless and writes one CSV row per sampled interval
     // of storm time: cloud base and top, peak updraft and downdraft, condensate
@@ -34,7 +39,8 @@ public:
     // storm when they say they do - and a capture cannot measure any of that.
     // This is the instrument the whole phase is calibrated on.
     static bool arcReport(const wchar_t* path, float stormSeconds, float sampleSeconds,
-                          float equilibrium = 0.0f);
+                          float equilibrium = 0.0f, float rotation = -1.0f,
+                          float shear = -1.0f);
 
     // Times the render pipeline with no window and no present. Wall clock
     // around a fully synchronised frame, so it is an upper bound that includes

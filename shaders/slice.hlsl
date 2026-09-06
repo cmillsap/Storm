@@ -57,6 +57,12 @@ void CSSlice(uint3 tid : SV_DispatchThreadID)
     colour = lerp(colour, float3(1.0, 1.0, 1.0), cloud * 0.92);
     colour = lerp(colour, float3(0.32, 0.42, 0.55), rain * 0.85);
 
+    // The funnel, in green, because it is the one thing on this plane that the
+    // solver knows nothing about and it has to be possible to tell them apart.
+    float debris;
+    float funnel = tornadoDensity(p, debris);
+    colour = lerp(colour, float3(0.25, 0.95, 0.45), saturate(funnel) * 0.9);
+
     // The sounding, drawn on the picture it produced.
     float metresPerPixel = (hi.y - lo.y) / (gFullSize.y * fit.y);
     float lcl = -gSatScale * log(gSurfaceRH);

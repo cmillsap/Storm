@@ -25,6 +25,21 @@ static const float kShapeErosion  = 0.32;      // larger-scale erosion of the si
 static const float kAnvilErosion  = 0.16;      // how much of that survives in ice
 static const float kRainErosion   = 0.30;      // and in a rain shaft
 static const float kRainAlbedo    = 0.55;      // rain scatters less than cloud does
+// And rain extinguishes far less than cloud does, per unit of water. Extinction
+// goes as the total cross-section, which for a fixed mass goes as 1/radius: a
+// millimetre raindrop is a hundred times a cloud droplet, so the same water as
+// rain blocks a small fraction of what it blocks as cloud. Treating the two
+// alike is why the storm's lower half was an opaque wall for kilometres in
+// every direction, with the tornado somewhere inside it.
+static const float kRainExtinction = 0.30;
+// Mammatus. The underside of an anvil is not flat: it hangs in pouches, and
+// they are the one cloud feature that reads instantly as "storm". Rather than
+// finding the underside and displacing a surface that does not exist here, the
+// sample position itself is pushed up and down by a low-frequency field inside
+// the ice. A boundary sampled through a displaced coordinate is a displaced
+// boundary, and it costs nothing - the lookup was happening anyway.
+static const float kMammatusScale = 0.00026;
+static const float kMammatusDepth = 300.0;
 static const float kPowder        = 2.2;
 static const float kPowderFloor   = 0.35;      // how lit the thinnest material stays
 static const float kAmbientLow    = 0.20;      // skylight reaching the cloud base
@@ -40,6 +55,148 @@ static const float kLobeMix       = 0.32;
 static const float3 kFlashColour  = float3(0.72, 0.80, 1.00);
 static const float  kFlashReach   = 1400.0;   // metres, e-folding
 static const float  kFlashGain    = 5.0;
+
+// ---- the tornado ----------------------------------------------------------
+//
+// Analytic, and unapologetically so. At 90 m cells a funnel is four cells
+// across, and Spike 04 measured what the solver does with imposed swirl at
+// that scale: it produces a rotating updraft, and none of the asymmetric
+// structure. So the funnel is authored - a radius profile about the
+// mesocyclone axis, banded by noise that rotates with height, with a debris
+// cloud where it meets the ground.
+//
+// It goes into sampleDensity rather than being composited afterwards, which
+// costs nothing and buys two things: the light volume sees it, so it is
+// shadowed by the storm above it the way it should be, and it casts its own
+// shadow across the ground.
+
+static const float kDebrisAlbedo = 0.42;   // dust is darker than cloud, and warmer
+
+float tornadoDensity(float3 p, out float debrisShare)
+{
+    debrisShare = 0.0;
+    if (gTornadoIntensity <= 0.001) return 0.0;
+
+    float ground = gTornadoAxis.y;
+    if (p.y > gTornadoTop + 120.0 || p.y < ground) return 0.0;
+
+    // The axis leans with the storm, and wanders. A funnel that is a straight
+    // cone reads as a cone; the wander is small - tens of metres - and it is
+    // most of what makes it read as a funnel instead.
+    float heightAbove = p.y - ground;
+    float2 axis = gTornadoAxis.xz + float2(gTornadoTilt * heightAbove, 0.0);
+
+    // Reject on the unwandered axis first, with the wander added to the bound.
+    // Everything below cloud base in the whole domain reaches this function,
+    // and the light volume calls it 128-cubed times as well: a texture fetch
+    // before this test is a texture fetch nearly all of them pay for.
+    const float kWander = 260.0;
+    float reach = max(gDebrisRadius, gWallRadius) * 2.2 + kWander;
+    if (dot(p.xz - axis, p.xz - axis) > reach * reach) return 0.0;
+
+    float3 wanderAt = float3(heightAbove * 0.0011, gTornadoSwirl * 0.013, 0.31);
+    float2 wander = (gBaseNoise.SampleLevel(gWrap, wanderAt, 0).rg - 0.5) * kWander;
+    axis += wander * saturate(heightAbove / 400.0);
+
+    float2 d = p.xz - axis;
+    float  r = length(d);
+    if (r > max(gDebrisRadius, gWallRadius) * 2.2) return 0.0;
+
+    // Banding that turns with height and with time. Differential - the top
+    // turns more slowly than the tip - and sampled at two scales, because one
+    // octave at this size is a smooth cone with a wobbly outline and nothing
+    // on its surface.
+    float angle = atan2(d.y, d.x);
+    float turn  = angle + gTornadoSwirl * (1.4 - 0.55 * saturate(p.y / max(gTornadoTop, 1.0)));
+    float3 bandA = float3(cos(turn), sin(turn), heightAbove * 0.0016) * 3.1;
+    float3 bandB = float3(cos(turn * 2.0), sin(turn * 2.0), heightAbove * 0.0052) * 5.7;
+    float  nA = gDetailNoise.SampleLevel(gWrap, bandA, 0).r;
+    float  nB = gDetailNoise.SampleLevel(gWrap, bandB, 0).g;
+    float  n  = nA * 0.68 + nB * 0.32;
+
+    float density = 0.0;
+
+    // The condensation funnel, from the cloud base down to wherever the tip
+    // has got to.
+    float tip = lerp(gTornadoTop, ground, gTornadoDescent);
+    if (p.y >= tip)
+    {
+        float h = saturate((p.y - tip) / max(gTornadoTop - tip, 1.0));
+        // A trumpet: narrow at the tip, flaring into the wall cloud above.
+        float radius = gTornadoRadius * (0.22 + 0.78 * pow(h, 1.35));
+        radius *= 0.74 + 0.52 * n;
+        // A hard core with a ragged edge, rather than one long gradient. The
+        // gradient is what made the first funnel look moulded.
+        density = 1.0 - smoothstep(radius * 0.72, radius, r);
+        density *= 0.72 + 0.5 * nB;
+        density *= 1.0 - smoothstep(0.88, 1.0, h);
+    }
+
+    // The wall cloud: a lowered collar hanging below the base around the
+    // mesocyclone, which is what a funnel comes out of. Without it the funnel
+    // emerges from a flat cloud base, and a flat base is the one thing a
+    // supercell's updraft does not have.
+    if (gWallRadius > 1.0 && p.y < gTornadoTop + 90.0 && p.y > gTornadoTop - gWallDrop)
+    {
+        float t  = saturate((gTornadoTop - p.y) / max(gWallDrop, 1.0));
+        // Striated: the collar is cut into by the same rotation, so its edge
+        // is a set of curved steps rather than a rim.
+        float striate = gDetailNoise.SampleLevel(gWrap,
+                          float3(cos(turn * 1.3), sin(turn * 1.3), t * 2.4) * 2.6, 0).b;
+        float wr = gWallRadius * (1.0 - 0.62 * t) * (0.70 + 0.60 * striate);
+        float wall = (1.0 - smoothstep(wr * 0.62, wr, r)) * (1.0 - t * t * 0.3);
+        density = max(density, wall * 0.92);
+    }
+
+    // The debris cloud. Wider, rougher, and only once the tip is near enough
+    // to the ground to be lifting anything.
+    if (gDebrisHeight > 1.0 && p.y < gDebrisHeight * 2.0)
+    {
+        float dh = saturate(1.0 - heightAbove / (gDebrisHeight * 2.0));
+        float dr = gDebrisRadius * (0.30 + 0.85 * dh) * (0.62 + 0.76 * n);
+        float debris = dh * dh * (1.0 - smoothstep(dr * 0.45, dr, r));
+        debris *= saturate(gTornadoDescent * 4.0 - 3.0);
+        if (debris > 0.0)
+        {
+            float share = saturate(debris / max(debris + density, 1e-4));
+            debrisShare = max(debrisShare, share);
+            density = max(density, debris);
+        }
+    }
+
+    return saturate(density) * gTornadoIntensity;
+}
+
+// The rear-flank downdraft's clear slot, and the vault under the updraft.
+// Returns how much of the precipitation at this point is cleared away.
+//
+// Authored, and the plan always said it would have to be: Spike 04 measured
+// imposed swirl producing a rotating updraft and none of the asymmetric
+// structure that goes with a real one - no hook, no clear slot, no displaced
+// shaft. The storm makes the rain; this decides where it is not.
+float clearSlot(float3 p)
+{
+    if (gSlotStrength <= 0.001) return 0.0;
+
+    float2 axis = gTornadoAxis.xz + float2(gTornadoTilt * (p.y - gTornadoAxis.y), 0.0);
+    float2 d = p.xz - axis;
+    float  r = length(d);
+    if (r > gSlotRadius || p.y > gSlotTop) return 0.0;
+
+    // The vault: rain-free right under the mesocyclone, whatever the azimuth.
+    float vault = 1.0 - smoothstep(gWallRadius * 0.8, gWallRadius * 2.1, r);
+
+    // And the slot itself, a wedge cut back into the precipitation from one
+    // side, curving with radius the way a rear-flank downdraft wraps.
+    float azimuth = atan2(d.y, d.x) - gSlotAzimuth - r * 0.00011;
+    azimuth = atan2(sin(azimuth), cos(azimuth));          // wrap to -pi..pi
+    float wedge = 1.0 - smoothstep(gSlotWidth * 0.55, gSlotWidth, abs(azimuth));
+    wedge *= smoothstep(gWallRadius * 0.5, gWallRadius * 1.4, r)
+           * (1.0 - smoothstep(gSlotRadius * 0.65, gSlotRadius, r));
+
+    float vertical = 1.0 - smoothstep(gSlotTop * 0.55, gSlotTop, p.y);
+    return gSlotStrength * saturate(max(vault, wedge)) * vertical;
+}
 
 float normalisedHeight(float3 p)
 {
@@ -75,14 +232,32 @@ bool intersectCloud(float3 ro, float3 rd, out float t0, out float t1)
 // Density, and how much of it is rain rather than cloud. The two are returned
 // together because every caller that shades needs to know the difference: a
 // rain shaft is the same medium geometrically and a much darker one optically.
-float sampleDensityAndRain(float3 p, bool detail, out float rainShare)
+float sampleDensityAndRain(float3 p, bool detail, out float rainShare, out float debrisShare)
 {
     rainShare = 0.0;
 
-    float4 s = sampleScalars(p);
+    // The funnel first, and outside the early-out below: it exists in air the
+    // solver has no condensate in at all, which is the point of it being
+    // analytic.
+    float funnelDebris;
+    float funnel = tornadoDensity(p, funnelDebris);
+    debrisShare = funnelDebris;
+
+    // Mammatus, applied to the position rather than to the density. Only in
+    // the ice, which is the only place an anvil underside exists.
+    float3 sampleAt = p;
+    float  ice = iceFraction(p.y);
+    if (ice > 0.0)
+    {
+        float lobes = gBaseNoise.SampleLevel(gWrap, p * kMammatusScale, 0).b;
+        sampleAt.y += (lobes - 0.5) * kMammatusDepth * ice;
+    }
+
+    float4 s = sampleScalars(sampleAt);
     float qc = s.b;
     float qr = s.a;
-    if (qc <= 0.0 && qr <= 0.0) return 0.0;
+    if (qc <= 0.0 && qr <= 0.0)
+        return (funnel > 0.0) ? funnel * gDensityScale : 0.0;
 
     // What counts as opaque is local, and this is the part of Phase 03 that
     // took longest to get right. Phase 02 normalised against one constant,
@@ -108,10 +283,22 @@ float sampleDensityAndRain(float3 p, bool detail, out float rainShare)
     // shaft is a shaft whether or not there is anything dense beside it, and
     // the whole point of it is that it is thinner than the cloud it falls out
     // of.
-    float rain = saturate(qr / gRainOpaque);
+    //
+    // And then the clear slot takes it away again where the storm's structure
+    // says there should be none. Only the rain: the wall cloud lives in the
+    // same place and has to survive it.
+    float rain = saturate(qr / gRainOpaque) * (1.0 - clearSlot(p));
 
-    float d = max(cloud, rain);
-    if (d <= 0.0) return 0.0;
+    float d = max(cloud, rain * kRainExtinction);
+
+    // Every early-out from here on has to let the funnel past, and this one
+    // caught me out: the clear slot removes the rain precisely where the
+    // funnel hangs, so under the mesocyclone there is often no cloud and no
+    // rain at all - and the function returned zero before the funnel was ever
+    // folded in. The tornado rendered as a two-hundred-metre stub of wall
+    // cloud with nothing below it, in the one place it was guaranteed to be
+    // invisible.
+    if (d <= 0.0) return (funnel > 0.0) ? funnel * gDensityScale : 0.0;
     rainShare = (d > 0.0) ? saturate(rain / max(d, 1e-4)) * saturate(1.0 - cloud) : 0.0;
 
     if (detail)
@@ -140,7 +327,7 @@ float sampleDensityAndRain(float3 p, bool detail, out float rainShare)
         float4 b = gBaseNoise.SampleLevel(gWrap, p * BASE_SCALE * 2.2, 0);
         float  wfbm = b.g * 0.625 + b.b * 0.25 + b.a * 0.125;
         d = saturate(remap(d, wfbm * kShapeErosion * erosion, 1.0, 0.0, 1.0));
-        if (d <= 0.0) return 0.0;
+        if (d <= 0.0) return (funnel > 0.0) ? funnel * gDensityScale : 0.0;
 
         // Then the fine detail. Wispy near the base, billowy up top, which is
         // what separates a ragged underside from a hard cauliflower crown.
@@ -158,14 +345,24 @@ float sampleDensityAndRain(float3 p, bool detail, out float rainShare)
     // ended in a straight vertical edge in mid-air where its anvil met the
     // margin. Fading the rendered density directly is what removes it, and it
     // is honest about what it is: the domain ends, and a real anvil does not.
-    return d * (1.0 - lateralMargin(p)) * gDensityScale;
+    d *= 1.0 - lateralMargin(p);
+
+    // The funnel is not subject to the erosion or the margin: it is authored
+    // geometry, and eroding it with the same noise that carves cauliflower
+    // turns it into a string of floating lumps.
+    if (funnel > 0.0)
+    {
+        debrisShare = (funnel > d) ? funnelDebris : funnelDebris * saturate(funnel / max(d, 1e-4));
+        d = max(d, funnel);
+    }
+    return d * gDensityScale;
 }
 
 // The shading passes that do not care which is which.
 float sampleDensity(float3 p, bool detail)
 {
-    float rainShare;
-    return sampleDensityAndRain(p, detail, rainShare);
+    float rainShare, debrisShare;
+    return sampleDensityAndRain(p, detail, rainShare, debrisShare);
 }
 
 // ---- lighting -------------------------------------------------------------

@@ -289,7 +289,7 @@ int App::run()
 // ------------------------------------------------------------------ capture
 
 bool App::captureFrame(UINT width, UINT height, float atTime, const wchar_t* path,
-                       bool crossSection)
+                       bool crossSection, float distance, float aimHeight)
 {
     Gpu gpu;
     if (!gpu.initialise(false)) { FailHard("No Direct3D 12 capable adapter found."); return false; }
@@ -300,6 +300,26 @@ bool App::captureFrame(UINT width, UINT height, float atTime, const wchar_t* pat
     renderer.generateNoise();
 
     RenderTarget& target = renderer.targets[0];
+
+    if (distance > 0.0f)
+    {
+        // Stand off the tornado on the inflow side - upstream of the storm,
+        // which is the quadrant a supercell keeps free of rain - and aim at it.
+        Simulation& sim = renderer.simulation;
+        const float axisX = sim.centre(0) + sim.sounding.forceOffset[0]
+                          + sim.sounding.rotationTilt * sim.sounding.rotationBase;
+        const float axisZ = sim.centre(2) + sim.sounding.forceOffset[1];
+
+        const float bearing = 0.95f;    // radians, round to the upshear side
+        const float ex = -std::sin(bearing) * distance;
+        const float ez = -std::cos(bearing) * distance;
+        target.camera.position[0] = axisX + ex;
+        target.camera.position[2] = axisZ + ez;
+
+        const float aim = (aimHeight > 0.0f) ? aimHeight : 2500.0f;
+        target.camera.baseYaw = std::atan2(-ex, -ez);
+        target.camera.pitch = std::atan2(aim - target.camera.position[1], distance);
+    }
 
     // The temporal resolve accumulates jittered samples, so a single frame is
     // noisier than what the screensaver actually shows. Run up to the requested
@@ -418,7 +438,7 @@ bool App::captureFrame(UINT width, UINT height, float atTime, const wchar_t* pat
 }
 
 bool App::arcReport(const wchar_t* path, float stormSeconds, float sampleSeconds,
-                    float equilibrium)
+                    float equilibrium, float rotation, float shear)
 {
     Gpu gpu;
     if (!gpu.initialise(false)) { FailHard("No Direct3D 12 capable adapter found."); return false; }
@@ -434,11 +454,13 @@ bool App::arcReport(const wchar_t* path, float stormSeconds, float sampleSeconds
     // Overriding the equilibrium level from the command line is what makes the
     // cloud-top calibration curve a sweep rather than a rebuild per point.
     if (equilibrium > 0.0f) sim.sounding.equilibrium = equilibrium;
+    if (rotation >= 0.0f)   sim.sounding.rotationSpeed = rotation;
+    if (shear >= 0.0f)      sim.sounding.shear[0] = shear;
     const float interval = 1.0f / (float)sim.stepsPerSecond;
     const int   steps = (int)(stormSeconds / sim.stepSeconds);
     const int   every = std::max(1, (int)(sampleSeconds / sim.stepSeconds));
 
-    std::string csv = "time_s,base_m,top_m,updraft_ms,downdraft_ms,condensate,rain,radius_m,cells\n";
+    std::string csv = "time_s,base_m,top_m,updraft_ms,downdraft_ms,condensate,rain,radius_m,cells,wzeta_corr,peak_zeta\n";
 
     // Band centres as kilometres, so a column header says what height it is.
     std::string profile = "time_s";
@@ -466,9 +488,10 @@ bool App::arcReport(const wchar_t* path, float stormSeconds, float sampleSeconds
 
         const SimStats s = sim.fetchStats();
         const int written = std::snprintf(row, sizeof(row),
-            "%.0f,%.0f,%.0f,%.2f,%.2f,%.3f,%.3f,%.0f,%.0f\n",
+            "%.0f,%.0f,%.0f,%.2f,%.2f,%.3f,%.3f,%.0f,%.0f,%.3f,%.4f\n",
             s.stormTime, s.cloudBase, s.cloudTop, s.updraftMax, s.downdraftMax,
-            s.condensate, s.rain, s.radius, s.cloudyCells);
+            s.condensate, s.rain, s.radius, s.cloudyCells,
+            s.updraftVorticityCorrelation, s.peakVorticity);
         if (written > 0) csv.append(row, (size_t)written);
 
         std::snprintf(row, sizeof(row), "%.0f", s.stormTime);

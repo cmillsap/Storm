@@ -1,5 +1,7 @@
 #include "gpu.h"
 
+#include <cstring>
+
 #include <dxcapi.h>
 #include <cstdio>
 
@@ -13,7 +15,28 @@ void FailHard(const char* what, HRESULT hr)
     else
         std::snprintf(buffer, sizeof(buffer), "%s", what);
 
-    MessageBoxA(nullptr, buffer, "Storm", MB_OK | MB_ICONERROR);
+    // Also to a file beside the working directory. A message box is the right
+    // thing when Windows launches the screensaver and there is no console, but
+    // it is invisible to a script - and every development switch here is run
+    // from one, where the whole symptom is "exit code 1" and nothing else.
+    HANDLE log = CreateFileW(L"storm-error.txt", GENERIC_WRITE, FILE_SHARE_READ, nullptr,
+                             CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (log != INVALID_HANDLE_VALUE)
+    {
+        DWORD written = 0;
+        WriteFile(log, buffer, (DWORD)std::strlen(buffer), &written, nullptr);
+        CloseHandle(log);
+    }
+
+    // The dialog is right when Windows launches the screensaver and there is
+    // no console to print to. It is exactly wrong for the development
+    // switches, which are run from scripts: a modal box with nobody to click
+    // it leaves the process alive and holding the GPU, and two of those left
+    // running turned every later measurement into nonsense before the cause
+    // was found. STORM_QUIET is set by anything driving this headlessly.
+    char quiet[8] = {};
+    if (GetEnvironmentVariableA("STORM_QUIET", quiet, sizeof(quiet)) == 0)
+        MessageBoxA(nullptr, buffer, "Storm", MB_OK | MB_ICONERROR);
     std::exit(1);
 }
 

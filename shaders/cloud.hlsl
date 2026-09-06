@@ -135,8 +135,8 @@ void CSCloud(uint3 tid : SV_DispatchThreadID)
         for (int i = 0; i < gNumSteps; ++i)
         {
             float3 p = ro + rd * t;
-            float  rainShare;
-            float  d = sampleDensityAndRain(p, true, rainShare);
+            float  rainShare, debrisShare;
+            float  d = sampleDensityAndRain(p, true, rainShare, debrisShare);
 
             if (d > 0.0)
             {
@@ -171,6 +171,12 @@ void CSCloud(uint3 tid : SV_DispatchThreadID)
                 // bright white column under the base, which is the one place
                 // a storm is never bright.
                 lum *= lerp(1.0, kRainAlbedo, rainShare);
+
+                // Debris is dust, not water: darker still, and warm rather
+                // than neutral. It is the one part of the storm that is not
+                // some shade of grey.
+                lum *= lerp(1.0, kDebrisAlbedo, debrisShare);
+                lum = lerp(lum, lum * float3(1.35, 1.05, 0.72), debrisShare);
 
                 // Lightning, added after the albedo term: a lit rain shaft is
                 // one of the few times rain is brighter than the cloud above.

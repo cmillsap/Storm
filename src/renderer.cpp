@@ -498,6 +498,61 @@ void Renderer::fillConstants(FrameConstants& c, const RenderTarget& target, floa
         if (intensity > 0.02f) c.historyBlend = 0.55f;
     }
 
+    // ---- the tornado
+    //
+    // Positioned on the mesocyclone axis at the cloud base, which is where a
+    // tornado hangs from, and given its swirl on the display's clock: the
+    // storm runs twenty times faster than the weather, and a funnel spun at
+    // storm rate is a blur.
+    {
+        const Sounding& sounding = simulation.sounding;
+        const StormArc& arc = simulation.arc;
+        const float storm = simulation.simulatedTime;
+
+        const float intensity = arc.funnelIntensity(storm);
+        const float descent   = arc.funnelDescent(storm);
+
+        // The funnel hangs from the cloud base, on the rotation axis, and the
+        // axis leans with the storm - so the tornado is displaced downstream
+        // of the surface forcing by however far the tower has leaned.
+        const float base = 1035.0f;   // the measured cloud base
+        c.tornadoAxis[0] = simulation.centre(0) + sounding.forceOffset[0]
+                         + sounding.rotationTilt * sounding.rotationBase;
+        c.tornadoAxis[1] = simulation.origin[1];
+        c.tornadoAxis[2] = simulation.centre(2) + sounding.forceOffset[1];
+        c.tornadoTilt    = sounding.rotationTilt * 0.5f;
+        c.tornadoTop     = base;
+        c.tornadoDescent = descent;
+        c.tornadoRadius  = 215.0f;
+        c.tornadoIntensity = intensity;
+
+        // Roughly one turn a second on screen. Faster reads as a special
+        // effect; slower does not read as a tornado at all.
+        c.tornadoSwirl = t * 6.0f;
+
+        c.debrisHeight = 170.0f * descent;
+        c.debrisRadius = 360.0f;
+
+        // The wall cloud: a lowered collar the funnel hangs out of, rather
+        // than a funnel emerging from a flat base. It arrives before the
+        // funnel does, which is the order a storm does it in.
+        const float walling = arc.rotation(storm);
+        c.wallRadius = 760.0f * walling;
+        c.wallDrop   = 540.0f * walling;
+
+        // The rear-flank clear slot. Authored, and it has to be: Spike 04
+        // measured imposed swirl producing a rotating updraft and none of the
+        // asymmetry that goes with one. Without it the funnel hangs inside an
+        // opaque rain base 18 km away and is not visible at all - which is
+        // exactly what the first tornado did.
+        c.slotAzimuth  = 2.60f;              // radians, toward the camera's left
+        c.slotWidth    = 1.45f;
+        c.slotRadius   = 5200.0f;
+        c.slotTop      = 3800.0f;
+        c.slotStrength = walling;
+        c.pad1[0] = c.pad1[1] = 0.0f;
+    }
+
     c.numSteps = 256;
     c.frameIndex = frameIndex;
     c.historyIndex = historyIndex;
@@ -547,7 +602,7 @@ void Renderer::renderTargets(float timeSeconds, float deltaSeconds)
         // A slow oscillation rather than a continuous sweep, so the cloud stays
         // framed. Combined with the sun's own cycle this gives the idle scene
         // two independent rhythms, and it is what exercises the reprojection.
-        target.camera.yaw = 0.09f * std::sin(timeSeconds * 0.021f);
+        target.camera.yaw = target.camera.baseYaw + 0.09f * std::sin(timeSeconds * 0.021f);
 
         FrameConstants constants = {};
         fillConstants(constants, target, timeSeconds);

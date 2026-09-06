@@ -29,6 +29,15 @@ cbuffer Frame : register(b0)
     int    gNumSteps;      int   gFrameIndex;  int   gHistoryIndex; int  gLightVolumeRes;
 
     float3 gFlashPosition; float gFlashIntensity;
+
+    float3 gTornadoAxis;   float gTornadoTilt;
+    float  gTornadoTop;    float gTornadoDescent;
+    float  gTornadoRadius; float gTornadoIntensity;
+    float  gTornadoSwirl;  float gDebrisHeight;
+    float  gDebrisRadius;  float gWallRadius;
+    float  gWallDrop;      float gSlotAzimuth;
+    float  gSlotWidth;     float gSlotRadius;
+    float  gSlotTop;       float gSlotStrength;   float2 gPad1;
 };
 
 // Values that change between dispatches inside one command list, so they

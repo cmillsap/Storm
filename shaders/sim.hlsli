@@ -35,7 +35,9 @@ cbuffer SimParams : register(b2)
     float  gLateralMargin; float gLateralRate;  float gShearTop;    float gQcFloor;
     float2 gShear;         float2 gStormMotion;
     float  gWindRelaxation; float gRainFallSpeed; float gAutoThreshold; float gAutoRate;
-    float  gAccretionRate;  float gRainEvaporation; float gRainOpaque; float gSimPad0;
+    float  gAccretionRate;  float gRainEvaporation; float gRainOpaque; float gRotationSpeed;
+    float  gRotationRadius; float gRotationBase;  float gRotationTop;  float gRotationRate;
+    float  gRotationTilt;   float3 gSimPad0;
 };
 
 // Velocity components live on cell faces, so each has its own texture. All
@@ -78,6 +80,22 @@ static const float kLatentOverCp = 2488.0;   // K per unit condensed mixing rati
 // and wants the former.
 float4 readSCurrent(int3 c) { return (gSimPhase == 0) ? gSimS0[c] : gSimS1[c]; }
 float  readVCurrent(int3 c) { return (gSimPhase == 0) ? gSimV0[c] : gSimV1[c]; }
+float  readUCurrent(int3 c) { return (gSimPhase == 0) ? gSimU0[c] : gSimU1[c]; }
+float  readWCurrent(int3 c) { return (gSimPhase == 0) ? gSimW0[c] : gSimW1[c]; }
+
+// Face values averaged to the cell centre, which is where vorticity has to be
+// evaluated if its two terms are to sit at the same point.
+float centreU(int3 c)
+{
+    int xp = (c.x + 1) % gSimRes.x;
+    return 0.5 * (readUCurrent(c) + readUCurrent(int3(xp, c.y, c.z)));
+}
+
+float centreW(int3 c)
+{
+    int zp = (c.z + 1) % gSimRes.z;
+    return 0.5 * (readWCurrent(c) + readWCurrent(int3(c.x, c.y, zp)));
+}
 
 // ---- environment ----------------------------------------------------------
 
@@ -161,6 +179,59 @@ float warmFraction(float y)
 float2 windEnv(float y)
 {
     return gShear * min(y, gShearTop) * 0.001 - gStormMotion;
+}
+
+// ---- the mesocyclone ------------------------------------------------------
+//
+// A target swirl about the storm's axis. Rankine: solid body inside the core
+// radius, falling as 1/r outside it, faded out well before the domain edge.
+// The axis leans downstream with height because the tower does.
+
+float2 rotationAxis(float y)
+{
+    return gForceCentre.xz + float2(gRotationTilt * max(y - gRotationBase, 0.0), 0.0);
+}
+
+// Target tangential speed at a world point, and zero outside the mesocyclone.
+//
+// What confines it is geometry, and getting that wrong is expensive. A core of
+// 2.6 km faded out to 8.8 km covers most of the domain's width, and a rotating
+// column that wide drags a broad layer up underneath it: 1.5 million cloudy
+// cells out of 5.7 million, and a cloud radius past the box half-diagonal.
+//
+// The obvious repair - gate the swirl on where there is already cloud - is
+// worse than the disease. It leaves the rotation unable to organise the inflow
+// that feeds the storm, and all it then does is shred what it is applied to:
+// the correlation stalled at 0.21, peak vorticity climbed as the small scales
+// tore up, and cloud top fell from 10.8 km to 8.4 km as the swirl was raised.
+// A mesocyclone is two to four kilometres across, and confining it to that is
+// the whole of what it needs.
+float rotationTarget(float3 p, out float2 tangent)
+{
+    float2 d = p.xz - rotationAxis(p.y);
+    float  r = length(d);
+
+    // Cyclonic, and the sign is not a coin toss. Vertical vorticity here is
+    // zeta = du/dz - dw/dx, so solid-body rotation about +y - counter-clockwise
+    // seen from above, which is what a Northern Hemisphere supercell does -
+    // has velocity along (dz, -dx). The other way round gives an anticyclonic
+    // storm and a correlation that runs monotonically negative, which is how
+    // this was caught: the magnitude tracked the rotation asked for perfectly
+    // and the sign was upside down.
+    tangent = (r > 1.0) ? float2(d.y, -d.x) / r : float2(0.0, 0.0);
+    if (gRotationSpeed <= 0.0) return 0.0;
+
+    // Rankine, with the outer branch faded to nothing not far beyond the core.
+    float core = gRotationRadius;
+    float profile = (r < core) ? (r / core) : (core / max(r, 1.0));
+    profile *= 1.0 - smoothstep(core * 1.4, core * 2.2, r);
+
+    // Vertically, a window with soft ends: the mesocyclone occupies the storm
+    // layer, not the boundary layer beneath it or the anvil above.
+    float window = smoothstep(gRotationBase, gRotationBase + 1400.0, p.y)
+                 * (1.0 - smoothstep(gRotationTop - 2600.0, gRotationTop, p.y));
+
+    return gRotationSpeed * profile * window;
 }
 
 // 0 through the interior, rising to 1 at the very edge of the domain. The

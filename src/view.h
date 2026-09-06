@@ -23,6 +23,9 @@ struct Camera
     // back for the anvil is Phase 05's; until then one framing has to hold the
     // whole arc, and it is the mature storm that sets it.
     float position[3] = { 0.0f, 60.0f, 0.0f };
+    // The slow oscillation the frame loop applies is added to this rather than
+    // replacing it, so a camera that has been aimed somewhere stays aimed.
+    float baseYaw = 0.0f;
     float yaw   = 0.0f;
     float pitch = 0.26f;
     float fovDegrees = 55.0f;

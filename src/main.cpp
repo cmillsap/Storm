@@ -232,12 +232,14 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR commandLine, int)
 
     if (command == L"/capture" || command == L"-capture")
     {
-        // /capture <file.bmp> [width height] [seconds]
+        // /capture <file.bmp> [w h] [seconds] [camera distance m] [aim height m]
         if (tokens.size() < 2) return 1;
         const UINT  w = (tokens.size() > 2) ? (UINT)_wtoi(tokens[2].c_str()) : 1720u;
         const UINT  h = (tokens.size() > 3) ? (UINT)_wtoi(tokens[3].c_str()) : 720u;
         const float t = (tokens.size() > 4) ? (float)_wtof(tokens[4].c_str()) : 0.0f;
-        return App::captureFrame(w, h, t, tokens[1].c_str()) ? 0 : 1;
+        const float d = (tokens.size() > 5) ? (float)_wtof(tokens[5].c_str()) : 0.0f;
+        const float a = (tokens.size() > 6) ? (float)_wtof(tokens[6].c_str()) : 0.0f;
+        return App::captureFrame(w, h, t, tokens[1].c_str(), false, d, a) ? 0 : 1;
     }
 
     if (command == L"/bench" || command == L"-bench")
@@ -263,12 +265,14 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR commandLine, int)
 
     if (command == L"/arc" || command == L"-arc")
     {
-        // /arc <file.csv> [storm seconds] [sample interval] [equilibrium m]
+        // /arc <file.csv> [storm s] [interval] [EL m] [rotation m/s] [shear m/s/km]
         const wchar_t* out = (tokens.size() > 1) ? tokens[1].c_str() : L"storm-arc.csv";
         const float total = (tokens.size() > 2) ? (float)_wtof(tokens[2].c_str()) : 900.0f;
         const float every = (tokens.size() > 3) ? (float)_wtof(tokens[3].c_str()) : 10.0f;
         const float el    = (tokens.size() > 4) ? (float)_wtof(tokens[4].c_str()) : 0.0f;
-        return App::arcReport(out, total, every, el) ? 0 : 1;
+        const float rot   = (tokens.size() > 5) ? (float)_wtof(tokens[5].c_str()) : -1.0f;
+        const float shear = (tokens.size() > 6) ? (float)_wtof(tokens[6].c_str()) : -1.0f;
+        return App::arcReport(out, total, every, el, rot, shear) ? 0 : 1;
     }
 
     if (command == L"/probe" || command == L"-probe")

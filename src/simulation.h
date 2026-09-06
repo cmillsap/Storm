@@ -132,7 +132,7 @@ struct Sounding
     float autoRate       = 0.0025f;   // per second
     float accretionRate  = 0.5f;      // per second per unit rain - falling rain collects cloud
     float rainEvaporation = 0.80f;    // per second per unit deficit per unit rain
-    float rainOpaque     = 0.0020f;   // rain mixing ratio that reads fully opaque
+    float rainOpaque     = 0.0060f;   // rain mixing ratio that reads fully opaque
 
     // ---- the lateral margin
     // The sides are periodic because the pressure solve wants them to be, so
@@ -153,14 +153,20 @@ struct Sounding
     // the inflow layer rather than the mean wind is what keeps the forcing
     // feeding the same column while the upper levels stream past it, which is
     // what tilts the tower and carries the anvil downstream.
-    // 2.0 m/s per km, so 12 m/s across the storm layer. Moderate by design.
-    // At 3.5 the tower tilted hard and then came apart - cloud top fell from
-    // 12.0 km to 7.0 km and the updraft with it - which is Spike 04's finding
-    // arriving on schedule: a sheared updraft needs rotation to sustain it,
-    // and directed rotation is Phase 04's, not this one's. Phase 03 ships the
-    // tilt the shear produces; Phase 04 raises the shear once the mesocyclone
-    // is there to hold the storm together under it.
-    float shear[2]       = { 2.0f, 0.0f };  // m/s per km, through shearTop
+    // 4.0 m/s per km - 24 m/s across the storm layer, which is supercell
+    // shear rather than the moderate value Phase 03 could carry. Phase 03
+    // shipped 2.0 because at 3.5 the tower tilted hard and came apart, and the
+    // reason was the one Spike 04 gave: a sheared updraft needs rotation to
+    // sustain it. With the mesocyclone directed, the same sweep reads:
+    //
+    //     shear        2.0    3.0    4.0    5.0   m/s/km
+    //     top, still  9765   8775   8235   6885   m
+    //     top, spun  11475  11385  11205  10665   m
+    //
+    // Unrotated the storm loses 30% of its depth across that range and half
+    // its updraft. Rotating, it loses 7%. That is the whole argument for
+    // directing rotation, and it is why this line could move.
+    float shear[2]       = { 4.0f, 0.0f };  // m/s per km, through shearTop
     float shearTop       = 6000.0f;         // m
     float stormMotion[2] = { 0.0f, 0.0f };  // m/s
     // How hard the environment is held against the storm's own circulation.
@@ -177,6 +183,29 @@ struct Sounding
     // because it is the kind of term that looks obviously right and is not.
     float envRelaxation  = 0.0f;            // per second
 
+    // ---- rotation
+    //
+    // Directed, not emergent. Spike 04 settled that: a mesocyclone does not
+    // arise from the hodograph at this resolution, and waiting for one is
+    // waiting for nothing. So a target swirl is imposed about the storm's axis
+    // and the flow is nudged toward it - but only its tangential component, so
+    // the inflow and outflow through the same region are left alone.
+    //
+    // What it buys is not the look of rotation. It is that a sheared updraft
+    // survives: the spike measured a rotating updraft still running at
+    // 66.8 m/s with the forcing off where a non-rotating one had fallen to
+    // 37.8, and cloud top two kilometres higher. Phase 03 shipped 2 m/s/km of
+    // shear because 3.5 tore the storm apart. This is what pays for more.
+    float rotationSpeed  = 24.0f;    // m/s peak tangential
+    float rotationRadius = 1800.0f;  // m - the Rankine core
+    float rotationBase   = 900.0f;   // m
+    float rotationTop    = 8000.0f;  // m
+    float rotationRate   = 0.05f;    // per second, how hard the flow is held to it
+    // The axis leans downstream with the tower it sits in. A vertical axis in
+    // a tilted storm applies the swirl beside the updraft at upper levels
+    // rather than through it.
+    float rotationTilt   = 0.30f;    // m of x per m of height
+
     // The forcing sits upstream of centre, so the anvil has the long side of
     // the domain to stream into rather than reaching the margin in half the
     // time. It is a framing decision, not a physical one.
@@ -187,13 +216,15 @@ struct Sounding
     // single mushroom, and a broad heated sheet inside the mixed layer feeds
     // condensation across a whole layer, which is what gives one flat base
     // under several turrets.
-    // Narrower and hotter than Phase 02's. A 2.2 km source made a tower as
-    // wide at mid-level as the anvil was at the top, and an anvil only reads
-    // as an anvil when it is wider than what feeds it. The domain caps how
-    // wide the anvil can get, so the tower is what has to give.
-    float forceHeat     = 0.0115f;
-    float forceMoisture = 2.8e-6f;
-    float forceRadius   = 1800.0f;   // m
+    // Narrower and cooler again in Phase 04. An anvil only reads as an anvil
+    // when it is wider than what feeds it, and the domain caps how wide the
+    // anvil can get, so the tower is what has to give. What makes this
+    // affordable is the mesocyclone: a rotating updraft sustains itself on far
+    // less forcing than an unrotating one needs, which is the whole reason
+    // Spike 04 said to direct the rotation.
+    float forceHeat     = 0.0090f;
+    float forceMoisture = 2.4e-6f;
+    float forceRadius   = 1200.0f;   // m
     float forceDepth    = 400.0f;    // m, vertical half-depth
     float forceHeight   = 400.0f;    // m above the ground, inside the mixed layer
 
@@ -244,6 +275,25 @@ struct StormArc
 
     // Forcing strength, 0 to 1.
     float ramp(float stormTime) const;
+    // How much of the sounding's rotation is being asked for, 0 to 1. A
+    // supercell acquires its mesocyclone as it deepens rather than arriving
+    // with one, and switching the swirl on under a shallow cumulus produces a
+    // spinning cumulus, which is not a thing.
+    float rotation(float stormTime) const;
+
+    // The tornado's own life, 0 to 1: how far the funnel has descended from
+    // the cloud base, and how strongly it is there at all. Separate curves
+    // because a tornado ropes out by thinning and tilting long after it has
+    // finished descending, and one curve cannot do both.
+    float funnelDescent(float stormTime) const;
+    float funnelIntensity(float stormTime) const;
+
+    // When the funnel starts to come down, relative to the mature act. A
+    // tornado follows the mesocyclone rather than arriving with it.
+    float tornadoOnset = 0.45f;    // fraction of the way through the sustain
+    float tornadoDescend = 220.0f; // s to reach the ground
+    float tornadoHold  = 420.0f;   // s on the ground
+    float tornadoRope  = 260.0f;   // s roping out
     // Height of the capping inversion, rising through the acts.
     float cap(float stormTime, float soundingEquilibrium) const;
     // And how strong it still is. A lid that only rises is still four kelvin
@@ -273,7 +323,9 @@ struct alignas(16) SimConstants
     float   lateralMargin;  float lateralRate;  float shearTop;     float qcFloor;
     float   shear[2];       float stormMotion[2];
     float   windRelaxation; float rainFallSpeed; float autoThreshold; float autoRate;
-    float   accretionRate;  float rainEvaporation; float rainOpaque; float pad0;
+    float   accretionRate;  float rainEvaporation; float rainOpaque; float rotationSpeed;
+    float   rotationRadius; float rotationBase;  float rotationTop;  float rotationRate;
+    float   rotationTilt;   float pad0[3];
 };
 static_assert(sizeof(SimConstants) % 16 == 0, "SimConstants must be 16-byte aligned");
 
@@ -299,6 +351,14 @@ struct SimStats
     static const int kBands = 32;
     float peakByBand[kBands] = {};
     float cellsByBand[kBands] = {};
+
+    // The mesocyclone, measured the way Spike 04 said to measure it: the
+    // correlation between vertical velocity and vertical vorticity through the
+    // storm layer. Peak vorticity is reported alongside it precisely because
+    // it is the number NOT to steer on - it is non-monotonic in the rotation
+    // asked for, and watching the two disagree is the point.
+    float updraftVorticityCorrelation = 0.0f;
+    float peakVorticity = 0.0f;   // 1/s
 
     bool hasCloud() const { return cloudyCells > 0.0f; }
 };
