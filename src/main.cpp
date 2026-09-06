@@ -242,12 +242,33 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR commandLine, int)
 
     if (command == L"/bench" || command == L"-bench")
     {
-        // /bench <file.txt> [width height] [frames]
+        // /bench <file.txt> [width height] [frames] [seconds to warm up to]
         const wchar_t* out = (tokens.size() > 1) ? tokens[1].c_str() : L"storm-bench.txt";
         const UINT w = (tokens.size() > 2) ? (UINT)_wtoi(tokens[2].c_str()) : 3440u;
         const UINT h = (tokens.size() > 3) ? (UINT)_wtoi(tokens[3].c_str()) : 1440u;
         const int  n = (tokens.size() > 4) ? _wtoi(tokens[4].c_str()) : 120;
-        return App::benchmark(w, h, n, out) ? 0 : 1;
+        const float t = (tokens.size() > 5) ? (float)_wtof(tokens[5].c_str()) : 0.0f;
+        return App::benchmark(w, h, n, out, t) ? 0 : 1;
+    }
+
+    if (command == L"/slice" || command == L"-slice")
+    {
+        // /slice <file.bmp> [width height] [seconds] - the fields, not the sky
+        if (tokens.size() < 2) return 1;
+        const UINT  w = (tokens.size() > 2) ? (UINT)_wtoi(tokens[2].c_str()) : 1280u;
+        const UINT  h = (tokens.size() > 3) ? (UINT)_wtoi(tokens[3].c_str()) : 720u;
+        const float t = (tokens.size() > 4) ? (float)_wtof(tokens[4].c_str()) : 0.0f;
+        return App::captureFrame(w, h, t, tokens[1].c_str(), true) ? 0 : 1;
+    }
+
+    if (command == L"/arc" || command == L"-arc")
+    {
+        // /arc <file.csv> [storm seconds] [sample interval] [equilibrium m]
+        const wchar_t* out = (tokens.size() > 1) ? tokens[1].c_str() : L"storm-arc.csv";
+        const float total = (tokens.size() > 2) ? (float)_wtof(tokens[2].c_str()) : 900.0f;
+        const float every = (tokens.size() > 3) ? (float)_wtof(tokens[3].c_str()) : 10.0f;
+        const float el    = (tokens.size() > 4) ? (float)_wtof(tokens[4].c_str()) : 0.0f;
+        return App::arcReport(out, total, every, el) ? 0 : 1;
     }
 
     if (command == L"/probe" || command == L"-probe")

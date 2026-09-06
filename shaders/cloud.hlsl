@@ -10,6 +10,39 @@
 #include "atmosphere.hlsli"
 #include "clouds.hlsli"
 
+// ---- coarse peak condensate -----------------------------------------------
+//
+// One cell per 4x4x4 block of simulation cells, rebuilt whenever the solver
+// steps. It exists because the density mapping needs to know what "full" means
+// locally, and there is no single answer: a tower core carries ten times the
+// condensate of the anvil it feeds, and the erosion below is a threshold, so
+// normalising both against one curve deletes the anvil outright rather than
+// carving it. Normalised against its own neighbourhood, every part of the
+// cloud presents the erosion with a field that reaches one in the interior and
+// falls to zero at the edge, which is what the erosion was written for.
+//
+// The floor in sampleDensity is what stops that from turning a stray wisp into
+// solid cloud just because it is locally the densest thing around.
+
+[numthreads(4, 4, 4)]
+void CSCloudMax(uint3 tid : SV_DispatchThreadID)
+{
+    int3 coarse = (gSimRes + 3) / 4;
+    if (any(int3(tid) >= coarse)) return;
+
+    float peak = 0.0;
+    int3 base = int3(tid) * 4;
+    for (int z = 0; z < 4; ++z)
+    for (int y = 0; y < 4; ++y)
+    for (int x = 0; x < 4; ++x)
+    {
+        int3 c = base + int3(x, y, z);
+        if (any(c >= gSimRes)) continue;
+        peak = max(peak, readSCurrent(c).b);
+    }
+    gCloudMaxRW[tid] = peak;
+}
+
 // ---- light volume ---------------------------------------------------------
 
 [numthreads(4, 4, 4)]
@@ -102,7 +135,8 @@ void CSCloud(uint3 tid : SV_DispatchThreadID)
         for (int i = 0; i < gNumSteps; ++i)
         {
             float3 p = ro + rd * t;
-            float  d = sampleDensity(p, true);
+            float  rainShare;
+            float  d = sampleDensityAndRain(p, true, rainShare);
 
             if (d > 0.0)
             {
@@ -130,6 +164,17 @@ void CSCloud(uint3 tid : SV_DispatchThreadID)
                 float  below = (1.0 - h) * (1.0 - h);
                 float3 ambient = skyAmbient * lerp(kAmbientLow, 1.0, h) + groundBounce * below;
                 float3 lum = sunColour * ms * phase * powder * kSunGain + ambient;
+
+                // Rain is the same medium geometrically and a much darker one
+                // optically: far fewer, far larger drops, so it scatters less
+                // of what reaches it. Shading it identically to cloud puts a
+                // bright white column under the base, which is the one place
+                // a storm is never bright.
+                lum *= lerp(1.0, kRainAlbedo, rainShare);
+
+                // Lightning, added after the albedo term: a lit rain shaft is
+                // one of the few times rain is brighter than the cloud above.
+                lum += flashLight(p) * powder;
 
                 float w = transmittance * (1.0 - tr);
                 scattered        += w * lum;

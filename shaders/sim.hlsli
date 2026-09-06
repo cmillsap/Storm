@@ -27,8 +27,15 @@ cbuffer SimParams : register(b2)
     float  gSimDt;         float gSimTime;      float gForceRamp;   float gQcRef;
     float3 gForceCentre;   float gForceRadius;
     float  gForceHeat;     float gForceMoisture; float gMixedTop;   float gLapseMixed;
-    float  gTropopause;    float gLapseTropo;   float gLapseStrato; float gSurfaceRH;
+    float  gEquilibrium;   float gLapseTropo;   float gLapseStrato; float gSurfaceRH;
     float  gUpperRH;       float gRhTransition; float gSatSurface;  float gSatScale;
+    float  gGlaciation;    float gIceEvaporation; float gFallout;   float gIceFallout;
+    float  gFreezingLevel; float gEnvRelaxation; float gCapHeight;   float gCapHeightPrev;
+    float  gCapStrength;   float gCapStrengthPrev; float gCapDepth;  float gSimPad1;
+    float  gLateralMargin; float gLateralRate;  float gShearTop;    float gQcFloor;
+    float2 gShear;         float2 gStormMotion;
+    float  gWindRelaxation; float gRainFallSpeed; float gAutoThreshold; float gAutoRate;
+    float  gAccretionRate;  float gRainEvaporation; float gRainOpaque; float gSimPad0;
 };
 
 // Velocity components live on cell faces, so each has its own texture. All
@@ -47,6 +54,12 @@ RWTexture3D<float>  gSimP0 : register(u15);
 RWTexture3D<float>  gSimP1 : register(u16);
 RWTexture3D<float>  gSimDiv : register(u17);
 
+// Diagnostics. Written only by the stats pass, which nothing but the /arc
+// harness dispatches: the storm arc has to be calibrated against numbers -
+// cloud top against the prescribed equilibrium level, in particular - and a
+// screenshot cannot tell you where the top is to within a hundred metres.
+RWStructuredBuffer<uint> gSimStats : register(u18);
+
 Texture3D<float>  gSimU0SRV : register(t7);
 Texture3D<float>  gSimU1SRV : register(t8);
 Texture3D<float>  gSimV0SRV : register(t9);
@@ -60,6 +73,12 @@ static const float kGravity      = 9.81;
 static const float kTheta0       = 300.0;
 static const float kLatentOverCp = 2488.0;   // K per unit condensed mixing ratio
 
+// Readers for the set that currently holds the data, as opposed to the
+// destination set the step passes write. The stats pass runs outside a step
+// and wants the former.
+float4 readSCurrent(int3 c) { return (gSimPhase == 0) ? gSimS0[c] : gSimS1[c]; }
+float  readVCurrent(int3 c) { return (gSimPhase == 0) ? gSimV0[c] : gSimV1[c]; }
+
 // ---- environment ----------------------------------------------------------
 
 // Three layers, not two. The middle one is the conditionally unstable
@@ -69,12 +88,27 @@ static const float kLatentOverCp = 2488.0;   // K per unit condensed mixing rati
 // climb the few hundred metres to its condensation level, so the first cloud
 // appeared only as the forcing was already decaying. A real boundary layer is
 // mixed and very nearly neutral, and a thermal crosses it almost for free.
+// The capping inversion: a step of gCapStrength kelvin spread over gCapDepth
+// metres, wherever the arc has put the lid. Adding it as a finite step rather
+// than moving the stratosphere is what lets the lid rise between acts without
+// rewriting the whole profile above it.
+float capInversion(float y, float capHeight, float strength)
+{
+    return strength * smoothstep(capHeight, capHeight + gCapDepth, y);
+}
+
 float thetaEnv(float y)
 {
-    if (y <= gMixedTop)   return gLapseMixed * y;
-    float mixed = gLapseMixed * gMixedTop;
-    if (y <= gTropopause) return mixed + gLapseTropo * (y - gMixedTop);
-    return mixed + gLapseTropo * (gTropopause - gMixedTop) + gLapseStrato * (y - gTropopause);
+    float base;
+    if (y <= gMixedTop)          base = gLapseMixed * y;
+    else
+    {
+        float mixed = gLapseMixed * gMixedTop;
+        if (y <= gEquilibrium)   base = mixed + gLapseTropo * (y - gMixedTop);
+        else                     base = mixed + gLapseTropo * (gEquilibrium - gMixedTop)
+                                      + gLapseStrato * (y - gEquilibrium);
+    }
+    return base + capInversion(y, gCapHeight, gCapStrength);
 }
 
 float satVapour(float y) { return gSatSurface * exp(-y / gSatScale); }
@@ -98,6 +132,51 @@ float vapourEnv(float y)
 {
     if (y <= gMixedTop) return gSurfaceRH * gSatSurface;
     return relHumidity(y) * satVapour(y);
+}
+
+// How glaciated the condensate at height y is. Ice is the anvil: it neither
+// evaporates into dry air nor falls out at anything like the rate water does,
+// and without it everything the tower detrains is gone within a step or two.
+// The transition is spread over two kilometres rather than switched, because a
+// hard boundary puts a visible seam across the cloud - and because the seam is
+// not sharp in a real storm either.
+float iceFraction(float y)
+{
+    return saturate((y - gGlaciation) / 2000.0);
+}
+
+// How much of the condensate at height y is still liquid water, and so able to
+// collide its way into raindrops. Separate from the glaciation level above:
+// that one governs whether the anvil survives, this one governs where rain can
+// form at all, and running the two off one height gave a storm that was mostly
+// precipitation.
+float warmFraction(float y)
+{
+    return 1.0 - saturate((y - gFreezingLevel) / 1500.0);
+}
+
+// The environmental wind, in the storm-relative frame the solver runs in:
+// the shear profile minus the storm's own motion. Zero shear leaves this the
+// still air Phase 02 assumed.
+float2 windEnv(float y)
+{
+    return gShear * min(y, gShearTop) * 0.001 - gStormMotion;
+}
+
+// 0 through the interior, rising to 1 at the very edge of the domain. The
+// sides are periodic because the pressure solve wants them to be, so without
+// this an anvil that reaches one edge comes back in at the other - which the
+// /arc harness caught as a cloud radius jumping to 11 km, the half-diagonal of
+// the box, the moment the anvil arrived.
+float lateralMargin(float3 p)
+{
+    // Measured from the middle of the domain, not from the forcing: the
+    // forcing deliberately sits upstream of centre, and a margin that moved
+    // with it would be wider on one side than the other.
+    float2 half = float2(gSimRes.x, gSimRes.z) * gSimCell * 0.5;
+    float2 d = abs(p.xz - (gSimOrigin.xz + half)) / half;
+    float  m = max(d.x, d.y);
+    return saturate((m - (1.0 - gLateralMargin)) / max(gLateralMargin, 1e-3));
 }
 
 // ---- grid <-> world -------------------------------------------------------
@@ -159,11 +238,16 @@ float4 sampleScalars(float3 world)
                             : gSimS1SRV.SampleLevel(gSimSampler, uv, 0);
 }
 
-// Condensate at a world point, for the renderer. Outside the grid there is no
-// cloud - the box test in the raymarch keeps rays from ever asking.
+// Condensate and rain at a world point, for the renderer. Outside the grid
+// there is no cloud - the box test in the raymarch keeps rays from ever asking.
 float sampleCondensate(float3 world)
 {
     return sampleScalars(world).b;
+}
+
+float sampleRain(float3 world)
+{
+    return sampleScalars(world).a;
 }
 
 #endif

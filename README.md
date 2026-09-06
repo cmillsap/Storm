@@ -6,12 +6,12 @@ supercell, and drops a tornado out of it — with a different storm every run.
 Direct3D 12, compute-shader volumetric rendering. Screensaver shell modelled on
 [cmillsap/Juggler](https://github.com/cmillsap/Juggler).
 
-**Status: Phase 02 complete.** `Storm.scr` builds, installs and runs, and grows
-its own cumulus: the shape on screen comes out of a fluid solver, not a
-procedural container. The four validation spikes that preceded it are kept
-under `spikes/`.
+**Status: Phase 03 complete.** `Storm.scr` builds, installs and runs, and plays
+the storm arc: a flat-based cumulus becomes a congestus, the cap erodes, and a
+tilted cumulonimbus drops a rain shaft and throws lightning around inside
+itself. The four validation spikes that preceded it are kept under `spikes/`.
 
-![Phase 02: a cumulus congestus grown by the simulation](docs/phase02-simulated-cloud.png)
+![Phase 03: a sheared cumulonimbus with its rain shaft](docs/phase03-storm.png)
 
 ## Building and running
 
@@ -41,8 +41,18 @@ the image is the only way to catch a renderer that is fast and wrong.
 |---|---|
 | `/w` | Run in an ordinary window rather than full screen |
 | `/capture <file.bmp> [w h] [seconds]` | Render one frame to disk |
-| `/bench [file.txt] [w h] [frames]` | Time the render pipeline |
+| `/slice <file.bmp> [w h] [seconds]` | Draw the simulation fields on a vertical plane |
+| `/arc [file.csv] [storm s] [interval] [EL m]` | Run the storm headless and measure it |
+| `/bench [file.txt] [w h] [frames] [warm-up s]` | Time the render pipeline |
 | `/probe [file.txt]` | Report the monitor layout and the mirroring arithmetic |
+
+`/arc` and `/slice` are Phase 03's, and between them they are why that phase
+landed. `/arc` runs the solver with no window and no render passes and writes a
+row per interval of storm time - cloud base and top, peak updraft and
+downdraft, condensate and rain, cloud radius - plus a second file giving peak
+condensate and cloudy-cell count in each of 32 height bands. `/slice` draws the
+fields themselves rather than the sky. Almost every wrong turn below was found
+in one of those two and would not have been visible in a screenshot.
 
 `/capture` runs up to the requested moment at the real frame rate rather than
 holding time still — with a frozen camera the temporal reprojection is an
@@ -177,6 +187,163 @@ would.
 
 
 
+## Phase 03 — the storm arc
+
+The cumulus becomes a storm. One sounding vector describes the atmosphere, an
+arc of three acts moves the lid that holds it down, and the solver does the
+rest: shear tilts the tower, rain falls out of it and cools the air under it,
+and lightning goes off inside.
+
+- **The sounding is a vector, and it is the only place the atmosphere is
+  described.** Every number the physics reads — lapse rates, humidity, the
+  freezing and glaciation levels, the shear, the forcing, what counts as
+  opaque — arrives from one struct. Nothing in the solver carries a tuned
+  constant of its own, which is what Phase 05 needs in order to derive a
+  different storm from a seed.
+- **A domain a cumulonimbus fits in.** 224 × 160 × 160 at 90 m: 20.16 km along
+  the shear, 14.4 km deep. Phase 02's 6.4 km cube was outgrown before its
+  forcing had even decayed.
+- **Three acts, separated by the cap.** A capping inversion of 5.5 K sits at
+  2.6 km and holds the sky to a 200 m-deep fair-weather cumulus; it rises and
+  weakens through the congestus act; by the mature act it is gone and the tower
+  runs to the equilibrium level.
+- **Shear, in the storm-relative frame.** 2 m/s per km through the lowest 6 km,
+  anchored on the inflow layer so the forcing keeps feeding one column while
+  the upper levels stream past it. The tower leans downstream and the outflow
+  goes with it.
+- **Rain as the fourth scalar channel**, which was there and unused:
+  autoconversion, accretion, sedimentation at 8 m/s, and evaporation into
+  unsaturated air. The evaporation is the point — it cools the air it falls
+  through, and that is the downdraft.
+- **Lightning** as a point light inside the cloud, scheduled on the display's
+  clock rather than the storm's, with a three-stroke envelope.
+- **Ice**, without which there is no anvil at all.
+
+**8.96 ms per frame at 3440×1440** on an RTX 5060 Ti — 27% of a 30 fps frame —
+measured on a mature storm rather than an empty sky, which is a change to the
+benchmark this phase had to make. Phase 02's 4.83 ms bought 2.7× the cells,
+2.7× the march steps and 2.4× the light volume, and two new passes.
+
+### The arc, measured
+
+`/arc` on the shipped sounding. Storm time; the display runs it twenty times
+faster than real weather, so this is about 140 seconds on screen.
+
+| storm time | cloud base | cloud top | peak updraft | condensate | rain |
+|---|---|---|---|---|---|
+| 400 s | 1035 m | 1665 m | 7.0 m/s | 1.8 | 0.0 |
+| 600 s | 1035 m | 3465 m | 24.6 m/s | 28.3 | 2.7 |
+| 800 s | 1035 m | 7605 m | 54.0 m/s | 115.9 | 26.0 |
+| 1200 s | 1035 m | 9225 m | 49.5 m/s | 222.0 | 64.2 |
+| 1600 s | 1035 m | 9765 m | 50.4 m/s | 175.1 | 71.1 |
+| 2200 s | 1035 m | 9225 m | 39.5 m/s | 130.0 | 50.9 |
+| 2800 s | 1125 m | 6075 m | 19.0 m/s | 21.6 | 16.7 |
+
+The cloud base does not move: 1035 m for the whole life of the storm, one cell
+off the 948 m the sounding predicts. The storm dies of its own rain.
+
+### The cloud-top calibration curve
+
+The plan asked for this rather than a direct mapping, and it was right to.
+Cloud top against the prescribed equilibrium level, everything else held:
+
+| prescribed EL | 5000 | 6500 | 8000 | 9500 | 10500 | 12000 |
+|---|---|---|---|---|---|---|
+| **cloud top** | 6975 | 8235 | 9135 | 9855 | 10125 | 9855 |
+| **overshoot** | +1975 | +1735 | +1135 | +355 | −375 | −2145 |
+
+Monotonic and directable to about 9.5 km, then flat. The flat part is the
+useful half of the finding: above roughly 10 km the cap stops being what limits
+the storm, because the parcel's own level of neutral buoyancy takes over. Put
+the cap above that and it caps nothing — which is exactly what was happening
+when the storm was topping out at 10.1 km with nothing spreading, because there
+is no anvil without something for the outflow to spread under. The shipped
+sounding puts the equilibrium level at 9200 m, under the neutral level, so the
+storm arrives at the cap with about a kilometre of overshoot and has to go
+sideways.
+
+To place cloud top higher than about 10 km, the lapse rate or the moisture has
+to change — not the cap.
+
+### Six findings, all of them from the instruments
+
+![The same storm as fields: vertical velocity behind cloud and rain, with the condensation, glaciation and equilibrium levels drawn on](docs/phase03-cross-section.png)
+
+- **The lapse rate and the equilibrium level are not independent.** A parcel
+  lifted out of the mixed layer gains 2488 K per unit of condensate; the
+  environment gains its lapse rate per metre; where those cross is the parcel's
+  neutral level. At 4.0 K/km that crossing is at 9.2 km, so a cap at 10.5 km
+  was never reached and the plume spread at mid-level instead — 22,700 cloudy
+  cells at 5.6 km against 2,700 at the cap. Lowering the lapse rate to 3.4 K/km
+  moved the crossing above the cap and the storm stopped filling out sideways.
+  This is the single most useful thing the phase learned about direction.
+- **A glaciation level is not a freezing level.** Ice is what makes an anvil:
+  detrained condensate meets air at 30% humidity and, under an instantaneous
+  saturation adjustment, is gone in one step, which is why the first 11 km
+  tower rendered as a bare column. But putting the ice transition at the 0 °C
+  line makes everything above 4 km permanent, and the storm grows a pancake at
+  5 to 6 km instead. Deep convection glaciates near −38 °C, around 8 km here.
+- **Opacity has to be measured locally.** Phase 02 mapped condensate to opacity
+  through one constant, which works while the cloud is a cumulus that is the
+  only thing in the box. Across a 14 km storm it fails twice: peak condensate
+  climbs from 0.0019 at the base to 0.0117 in the anvil, and at any one height
+  the periphery carries a tenth of what the core does. Because the erosion that
+  carves the silhouette is a *threshold*, a mismatched reference does not carve
+  the anvil, it deletes every sample of it. The fix is a coarse volume holding
+  peak condensate over each 4×4×4 block, rebuilt at simulation rate, and
+  normalising against that — so every part of the cloud hands the erosion a
+  field that reaches one inside and falls to zero at the edge.
+- **Relaxing the environment is not free.** Clear air was being nudged back
+  toward the sounding to let the cap move. But the forcing works by
+  accumulating heat and moisture in clear air, so the relaxation was
+  subtracting from the forcing every step: it cost the storm two kilometres of
+  depth. Moving the environment *exactly* instead — adding the change in the
+  profile to every cell's potential temperature, which leaves every parcel's
+  departure from its surroundings untouched — made the term unnecessary. It is
+  left in the sounding at zero because it is the kind of term that looks
+  obviously right.
+- **A lid should erode by weakening, not by rising.** A capping inversion that
+  only rises is still several kelvin of extra warmth sitting exactly where the
+  tower is trying to climb; the storm topped out at 8.9 km against the 11.0 km
+  the same forcing reached with no lid at all.
+- **The margin was eating the anvil.** The sides are periodic because the
+  pressure solve wants them to be, so outflow that reaches one face returns
+  through the other — measured, unmistakably, as a cloud radius that jumped to
+  the box half-diagonal the moment the anvil arrived. A relaxation margin fixes
+  it, but at 28% of the half-width it began absorbing 5.2 km from the storm
+  axis across the shear, and mass continuity puts the anvil edge at about
+  4 m/s once it is 5 km out. It never got past the margin.
+
+### Two bugs worth remembering
+
+- **One constant buffer cannot serve several simulation steps in a frame.** The
+  CPU writes all of them before the GPU runs any, so every step in the frame
+  reads whichever was written last. That was harmless while the only per-step
+  value was a slowly varying forcing ramp, and stopped being harmless the
+  moment the arc started moving the lid, because the environment shift is a
+  *difference* between consecutive steps: three steps sharing a slot applied
+  one difference three times and lost the other two. There is now a slot per
+  step, plus slot zero for the render passes.
+- **Rain evaporation must depend on how much rain there is.** Written as a rate
+  per unit saturation deficit alone, the rate is the same for a downpour and
+  for the last drop of it: a shaft of 0.002 emptied in one second of storm
+  time, the rain never got below the cloud base, and the precipitation shaft
+  the phase is supposed to ship was two cells deep.
+
+Known limits: **the anvil is a downstream shelf rather than an incus.** The
+storm reaches its cap, overshoots it and spreads, but the spread is a few
+kilometres and the cloud is still widest in the middle rather than at the top.
+Mass continuity says why — the outflow slows as it spreads, and a 20 km domain
+does not give it long enough. A real anvil is tens of kilometres across and no
+plausible domain will hold one, so the honest options are a wider box in
+Phase 04 or an art-directed extension at render time, which is what the plan
+already assumes for the hook and the RFD clear slot. There is also no rotation:
+at 3.5 m/s per km of shear the tower tilted hard and came apart, cloud top
+falling from 12.0 km to 7.0 km, which is Spike 04's finding arriving on
+schedule. Phase 03 ships the 2 m/s per km the storm survives without help;
+Phase 04 raises it once the mesocyclone is there to hold it together.
+
+
 ## Spikes
 
 Four spikes were run before committing to the build, each retiring a specific
@@ -288,11 +455,13 @@ shaders/
   atmosphere.hlsli       Rayleigh/Mie scattering, shared by sky and aerial perspective
   clouds.hlsli           cloud density, shape and lighting constants
   sim.hlsli              the staggered grid, the sounding, and how to sample both
-  sim.hlsl               advect, force, buoyancy, condense, project
+  sim.hlsl               advect, force, buoyancy, condense, precipitate,
+                         damp, project, and the /arc diagnostics
   noise_gen.hlsl         tileable Perlin-Worley and Worley volumes
   cloud.hlsl             light volume build and the cloud march
   resolve.hlsl           temporal reprojection and accumulation
   composite.hlsl         full-resolution sky, ground and cloud composite
+  slice.hlsl             the fields on a vertical plane, for /slice
   blit.hlsl              presentation blit with the crop rectangle
 
 spikes/01-perf/          what a raymarch step costs

@@ -27,6 +27,8 @@ cbuffer Frame : register(b0)
 
     float  gCloudBottom;   float gCloudTop;    float gCoverage;    float gDensityScale;
     int    gNumSteps;      int   gFrameIndex;  int   gHistoryIndex; int  gLightVolumeRes;
+
+    float3 gFlashPosition; float gFlashIntensity;
 };
 
 // Values that change between dispatches inside one command list, so they
@@ -49,6 +51,11 @@ RWTexture2D<float4> gCloudHistory1 : register(u3);
 RWTexture3D<float>  gLightVolumeRW : register(u4);
 RWTexture3D<float4> gBaseNoiseRW   : register(u5);
 RWTexture3D<float4> gDetailNoiseRW : register(u6);
+// Peak condensate over each 4x4x4 block of simulation cells, rebuilt at
+// simulation rate. Two jobs: it is what the density mapping normalises
+// against, and it is what tells the march where there is nothing to march
+// through. (u19 - the simulation owns u7..u18.)
+RWTexture3D<float>  gCloudMaxRW    : register(u19);
 
 Texture2D<float4>   gSharedSRV     : register(t0);
 Texture2D<float4>   gCloudCurrSRV  : register(t1);
@@ -57,6 +64,7 @@ Texture2D<float4>   gHistory1SRV   : register(t3);
 Texture3D<float>    gLightVolume   : register(t4);
 Texture3D<float4>   gBaseNoise     : register(t5);
 Texture3D<float4>   gDetailNoise   : register(t6);
+Texture3D<float>    gCloudMax      : register(t15);
 
 SamplerState gClamp : register(s0);
 SamplerState gWrap  : register(s1);

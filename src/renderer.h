@@ -34,6 +34,9 @@ struct alignas(16) FrameConstants
 
     float cloudBottom;      float cloudTop;     float coverage;     float densityScale;
     int32_t numSteps;       int32_t frameIndex; int32_t historyIndex; int32_t lightVolumeRes;
+
+    // Lightning. One flash at a time, as a point light inside the cloud.
+    float flashPosition[3]; float flashIntensity;
 };
 static_assert(sizeof(FrameConstants) % 16 == 0, "FrameConstants must be 16-byte aligned");
 
@@ -45,7 +48,8 @@ struct Renderer
 
     ComPtr<ID3D12RootSignature> rootSignature;
     ComPtr<ID3D12PipelineState> psoGenBase, psoGenDetail;
-    ComPtr<ID3D12PipelineState> psoLightVolume, psoCloud, psoResolve, psoComposite, psoBlit;
+    ComPtr<ID3D12PipelineState> psoCloudMax, psoLightVolume, psoCloud, psoResolve, psoComposite, psoBlit;
+    ComPtr<ID3D12PipelineState> psoSlice;   // development cross-section
 
     // Phase 01 renders one target, mirrored everywhere. The vector is the seam
     // for independent cameras later; the frame loop already iterates.
@@ -54,6 +58,11 @@ struct Renderer
     ComPtr<ID3D12Resource> cloudCurrent;
     ComPtr<ID3D12Resource> cloudHistory[2];
     ComPtr<ID3D12Resource> lightVolume;
+    // Peak condensate over each 4x4x4 block of simulation cells. Rebuilt at
+    // simulation rate, and read by every density sample as the local reference
+    // the opacity mapping normalises against.
+    ComPtr<ID3D12Resource> cloudMax;
+    UINT cloudMaxRes[3] = {};
     ComPtr<ID3D12Resource> baseNoise, detailNoise;
     ComPtr<ID3D12Resource> constantBuffer;
     uint8_t* constantsMapped = nullptr;
@@ -75,6 +84,10 @@ struct Renderer
 
     void generateNoise();                    // once, at startup
     void renderTargets(float timeSeconds, float deltaSeconds);
+
+    // Draws the simulation fields on a vertical plane instead of rendering the
+    // sky. Development only, and worth every line: see slice.hlsl.
+    void renderCrossSection(float timeSeconds);
     void presentView(View& view);
     void finishFrame();
 

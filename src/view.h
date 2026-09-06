@@ -13,12 +13,18 @@
 
 struct Camera
 {
-    // Framed on the cloud: a congestus spanning 1.1 to 6.6 km at 7 km out
-    // subtends roughly 9 to 43 degrees, so the pitch has to lift for the crown
-    // to stay in shot. A level camera with a wide field of view clips the top.
+    // Framed on the storm, not on the cumulus it starts as. Phase 03 grew the
+    // domain to 14.4 km deep, and a cumulonimbus filling it subtends 44 degrees
+    // vertically from 18 km out - which is why the camera stands that far back
+    // rather than the 7 km Phase 02 used. The pitch splits the difference
+    // between the base at 900 m and an anvil at 11 km.
+    //
+    // Fixed. The camera spline that pushes in for the cumulus act and pulls
+    // back for the anvil is Phase 05's; until then one framing has to hold the
+    // whole arc, and it is the mature storm that sets it.
     float position[3] = { 0.0f, 60.0f, 0.0f };
     float yaw   = 0.0f;
-    float pitch = 0.30f;
+    float pitch = 0.26f;
     float fovDegrees = 55.0f;
 };
 

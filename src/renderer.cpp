@@ -15,12 +15,41 @@ static const float kSunCycleSeconds = 300.0f;
 static const UINT kBaseNoiseRes   = 128;
 static const UINT kDetailNoiseRes = 32;
 // Matched against the simulation cell size: at 64 the light volume was
-// coarser than the density it shades and left visible facets.
-static const UINT kLightVolumeRes = 96;
+// coarser than the density it shades and left visible facets. Raised again in
+// Phase 03 - the domain went from a 6.4 km cube to 15.8 x 14.4 x 15.8 km, so
+// 96 cells that used to be 67 m across would now be 165 m, coarser than the
+// cell size the density itself is stored at.
+static const UINT kLightVolumeRes = 128;
 
 // The cloud march is the expensive pass and it is the one the temporal resolve
 // exists to amortise, so it runs at half the output resolution.
 static const UINT kResolutionDivisor = 2;
+
+// ---- lightning ------------------------------------------------------------
+//
+// A flash is scheduled in wall time, not storm time. The storm runs twenty
+// times faster than the weather, and a flash that lasted a fifth of a storm
+// second would be gone inside one displayed frame; what the eye has to read is
+// a fifth of a *second*, so the schedule lives on the display's clock and only
+// its rate is taken from where the storm has got to.
+static const float kFlashSlotSeconds = 1.15f;
+
+// Three strokes with a decaying envelope, which is what separates lightning
+// from a lamp being switched on: a single exponential reads as a camera flash.
+static float FlashEnvelope(float since)
+{
+    float e = std::exp(-since * 24.0f);
+    if (since > 0.075f) e += 0.72f * std::exp(-(since - 0.075f) * 28.0f);
+    if (since > 0.160f) e += 0.44f * std::exp(-(since - 0.160f) * 34.0f);
+    return e;
+}
+
+static float FlashHash(int slot, int salt)
+{
+    uint32_t h = (uint32_t)slot * 374761393u + (uint32_t)salt * 668265263u;
+    h = (h ^ (h >> 13)) * 1274126177u;
+    return (float)((h ^ (h >> 16)) & 0xFFFFFF) / (float)0xFFFFFF;
+}
 
 // Halton(2,3), used to jitter the primary ray a sub-pixel amount each frame.
 // Accumulated by the resolve, this is what turns a cheap march into a clean
@@ -170,10 +199,12 @@ bool Renderer::initialise(Gpu& g)
     computePasses[] = {
         { &psoGenBase,     L"noise_gen.hlsl", L"CSGenBase",     "noise base PSO" },
         { &psoGenDetail,   L"noise_gen.hlsl", L"CSGenDetail",   "noise detail PSO" },
+        { &psoCloudMax,    L"cloud.hlsl",     L"CSCloudMax",    "cloud max PSO" },
         { &psoLightVolume, L"cloud.hlsl",     L"CSLightVolume", "light volume PSO" },
         { &psoCloud,       L"cloud.hlsl",     L"CSCloud",       "cloud PSO" },
         { &psoResolve,     L"resolve.hlsl",   L"CSResolve",     "resolve PSO" },
         { &psoComposite,   L"composite.hlsl", L"CSComposite",   "composite PSO" },
+        { &psoSlice,       L"slice.hlsl",     L"CSSlice",       "cross-section PSO" },
     };
     for (auto& pass : computePasses)
     {
@@ -245,6 +276,15 @@ bool Renderer::initialise(Gpu& g)
     STORM_CHECK(constantBuffer->Map(0, &noRead, (void**)&constantsMapped), "map frame constants");
 
     if (!simulation.create(*gpu, rootSignature.Get())) return false;
+
+    // Sized off the simulation, so it has to come after it. One cell per
+    // 4x4x4 block; the domain divides exactly, and CSCloudMax derives the same
+    // dimensions from gSimRes rather than being told them.
+    for (int i = 0; i < 3; ++i) cloudMaxRes[i] = (simulation.resolution[i] + 3) / 4;
+    cloudMax = CreateTexture(*gpu, D3D12_RESOURCE_DIMENSION_TEXTURE3D, DXGI_FORMAT_R16_FLOAT,
+                             cloudMaxRes[0], cloudMaxRes[1], (UINT16)cloudMaxRes[2], "cloud max");
+    MakeUav(*gpu, cloudMax.Get(), DXGI_FORMAT_R16_FLOAT, kUavCloudMax, cloudMaxRes[2]);
+    MakeSrv(*gpu, cloudMax.Get(), DXGI_FORMAT_R16_FLOAT, kSrvCloudMax, true);
     return true;
 }
 
@@ -261,6 +301,7 @@ void Renderer::shutdown()
     cloudHistory[0].Reset();
     cloudHistory[1].Reset();
     lightVolume.Reset();
+    cloudMax.Reset();
     baseNoise.Reset();
     detailNoise.Reset();
     constantBuffer.Reset();
@@ -385,6 +426,11 @@ void Renderer::fillConstants(FrameConstants& c, const RenderTarget& target, floa
     // How much of the accumulated history survives each frame. High enough to
     // average many jittered samples, low enough that the image still settles
     // within about half a second after a change.
+    //
+    // Except during a flash. A flash lasts about six frames at 30 fps, and at
+    // a 0.90 blend six frames is not enough for it to reach the screen: it
+    // arrives dim, smeared, and still fading two flashes later. The trade is
+    // more noise for the fifth of a second when nobody is looking at noise.
     c.historyBlend = 0.90f;
 
     const float phase = t / kSunCycleSeconds * 2.0f * kPi;
@@ -397,13 +443,10 @@ void Renderer::fillConstants(FrameConstants& c, const RenderTarget& target, floa
 
     // The cloud volume is the simulation domain. cloudBottom and cloudTop are
     // still used for the height-dependent detail flip and ambient term.
-    const float half = simulation.extent() * 0.5f;
-    c.cloudCentre[0] = simulation.origin[0] + half;
-    c.cloudCentre[1] = simulation.origin[1] + half;
-    c.cloudCentre[2] = simulation.origin[2] + half;
-    c.cloudRadius = half;
+    for (int i = 0; i < 3; ++i) c.cloudCentre[i] = simulation.centre(i);
+    c.cloudRadius = simulation.extent(0) * 0.5f;
     c.cloudBottom = simulation.origin[1];
-    c.cloudTop = simulation.origin[1] + simulation.extent();
+    c.cloudTop = simulation.origin[1] + simulation.extent(1);
     c.coverage = 0.55f;
     c.densityScale = 1.0f;
 
@@ -416,7 +459,46 @@ void Renderer::fillConstants(FrameConstants& c, const RenderTarget& target, floa
     c.jitter[1] = halton(frameIndex + 1, 3) - 0.5f;
     c.pad0[0] = c.pad0[1] = 0.0f;
 
-    c.numSteps = 96;
+    // Sized to the box, not picked. 96 steps across Phase 02's 6.4 km cube was
+    // a 67 m step; the same count across the Phase 03 domain would be 210 m,
+    // which at an extinction of 0.055 per metre is an optical depth of 11 in a
+    // single sample and lays down visible shells. This holds the step near
+    // 70 m for a ray crossing the box corner to corner.
+    // Lightning. The rate follows the arc rather than the condensate field,
+    // because reading the condensate field back would cost a fence: the storm
+    // is electrified once the tower is deep and stops being so as it decays,
+    // and the arc already knows both of those without asking the GPU.
+    {
+        const StormArc& arc = simulation.arc;
+        const float storm = simulation.simulatedTime;
+        const float ending = arc.mature + arc.sustain + arc.decay * 0.5f;
+        const float electrified =
+            std::min(std::max((storm - arc.congestus) / (arc.mature - arc.congestus), 0.0f), 1.0f)
+          * std::min(std::max((ending - storm) / (arc.decay * 0.5f), 0.0f), 1.0f);
+
+        const int   slot  = (int)std::floor(t / kFlashSlotSeconds);
+        const float since = t - (float)slot * kFlashSlotSeconds;
+
+        float intensity = 0.0f;
+        if (FlashHash(slot, 0) < electrified * 0.85f)
+            intensity = FlashEnvelope(since) * (0.55f + 0.45f * FlashHash(slot, 1)) * electrified;
+
+        // Inside the cloud, below the glaciation level - lightning comes from
+        // the mixed-phase region, and putting it in the anvil lights the wrong
+        // part of the storm.
+        const float spread = simulation.sounding.forceRadius * 1.8f;
+        c.flashPosition[0] = simulation.centre(0) + simulation.sounding.forceOffset[0]
+                           + (FlashHash(slot, 2) - 0.3f) * spread * 2.0f;
+        c.flashPosition[1] = 2200.0f + FlashHash(slot, 3) * 3600.0f;
+        c.flashPosition[2] = simulation.centre(2) + (FlashHash(slot, 4) - 0.5f) * spread;
+        c.flashIntensity = intensity;
+
+        // Let the resolve respond. Set above, and overridden here because the
+        // flash is not known until now.
+        if (intensity > 0.02f) c.historyBlend = 0.55f;
+    }
+
+    c.numSteps = 256;
     c.frameIndex = frameIndex;
     c.historyIndex = historyIndex;
     c.lightVolumeRes = (int32_t)kLightVolumeRes;
@@ -481,18 +563,34 @@ void Renderer::renderTargets(float timeSeconds, float deltaSeconds)
         push.simPhase = simulation.phase;
         gpu->cmd->SetComputeRoot32BitConstants(kRootPush, sizeof(PushConstants) / 4, &push, 0);
 
-        // 1. Sun transmittance, rebuilt only when the volume moved. This is the
-        //    plan's amortisation: lighting at simulation rate, not frame rate.
-        //    Lighting changes slowly and the sun barely moves between frames.
+        // 1. The coarse peak, then sun transmittance, both rebuilt only when
+        //    the volume moved. This is the plan's amortisation: lighting at
+        //    simulation rate, not frame rate. The order matters - every
+        //    density sample the light volume takes reads the coarse peak as
+        //    its reference, so the peak has to be current first.
         if (simulationStepped || !lightVolumeReady)
         {
             if (lightVolumeReady)
             {
-                auto toWrite = Gpu::transition(lightVolume.Get(),
-                                               D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                                               D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-                gpu->cmd->ResourceBarrier(1, &toWrite);
+                D3D12_RESOURCE_BARRIER toWrite[] = {
+                    Gpu::transition(lightVolume.Get(),
+                                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                    D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
+                    Gpu::transition(cloudMax.Get(),
+                                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                                    D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
+                };
+                gpu->cmd->ResourceBarrier(2, toWrite);
             }
+
+            gpu->cmd->SetPipelineState(psoCloudMax.Get());
+            gpu->cmd->Dispatch((cloudMaxRes[0] + 3) / 4, (cloudMaxRes[1] + 3) / 4,
+                               (cloudMaxRes[2] + 3) / 4);
+
+            auto peakToRead = Gpu::transition(cloudMax.Get(),
+                                              D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                                              D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            gpu->cmd->ResourceBarrier(1, &peakToRead);
 
             gpu->cmd->SetPipelineState(psoLightVolume.Get());
             gpu->cmd->Dispatch(kLightVolumeRes / 4, kLightVolumeRes / 4, kLightVolumeRes / 4);
@@ -557,6 +655,33 @@ void Renderer::renderTargets(float timeSeconds, float deltaSeconds)
     historyIndex ^= 1;
     historyValid = true;
     ++frameIndex;
+}
+
+void Renderer::renderCrossSection(float timeSeconds)
+{
+    simulation.transitionForReading();
+    RenderTarget& target = targets[0];
+
+    FrameConstants constants = {};
+    fillConstants(constants, target, timeSeconds);
+    std::memcpy(constantsMapped, &constants, sizeof(constants));
+
+    gpu->cmd->SetComputeRootSignature(rootSignature.Get());
+    gpu->cmd->SetComputeRootDescriptorTable(kRootTable, gpu->srvHeap.gpu(0));
+    gpu->cmd->SetComputeRootConstantBufferView(kRootFrame, constantBuffer->GetGPUVirtualAddress());
+    gpu->cmd->SetComputeRootConstantBufferView(kRootSim, simulation.constantsAddress());
+
+    PushConstants push = {};
+    push.cropScale[0] = push.cropScale[1] = 1.0f;
+    push.simPhase = simulation.phase;
+    gpu->cmd->SetComputeRoot32BitConstants(kRootPush, sizeof(PushConstants) / 4, &push, 0);
+
+    gpu->cmd->SetPipelineState(psoSlice.Get());
+    gpu->cmd->Dispatch((target.width + 7) / 8, (target.height + 7) / 8, 1);
+
+    auto toRead = Gpu::transition(target.texture.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                                  D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    gpu->cmd->ResourceBarrier(1, &toRead);
 }
 
 void Renderer::presentView(View& view)

@@ -5,6 +5,8 @@
 #include <windowsx.h>   // GET_X_LPARAM / GET_Y_LPARAM
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <string>
 
 App* App::s_instance = nullptr;
 
@@ -286,7 +288,8 @@ int App::run()
 
 // ------------------------------------------------------------------ capture
 
-bool App::captureFrame(UINT width, UINT height, float atTime, const wchar_t* path)
+bool App::captureFrame(UINT width, UINT height, float atTime, const wchar_t* path,
+                       bool crossSection)
 {
     Gpu gpu;
     if (!gpu.initialise(false)) { FailHard("No Direct3D 12 capable adapter found."); return false; }
@@ -343,7 +346,16 @@ bool App::captureFrame(UINT width, UINT height, float atTime, const wchar_t* pat
                                                     IID_PPV_ARGS(&readback)), "capture readback");
 
     gpu.beginFrame();
-    renderer.renderTargets(atTime, 1.0f / 30.0f);   // leaves the target readable by a shader
+    // Both paths leave the target readable by a shader.
+    if (crossSection)
+    {
+        renderer.simulation.advance(1.0f / 30.0f);
+        renderer.renderCrossSection(atTime);
+    }
+    else
+    {
+        renderer.renderTargets(atTime, 1.0f / 30.0f);
+    }
     auto toCopy = Gpu::transition(target.texture.Get(),
                                   D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
                                   D3D12_RESOURCE_STATE_COPY_SOURCE);
@@ -405,7 +417,95 @@ bool App::captureFrame(UINT width, UINT height, float atTime, const wchar_t* pat
     return true;
 }
 
-bool App::benchmark(UINT width, UINT height, int frames, const wchar_t* path)
+bool App::arcReport(const wchar_t* path, float stormSeconds, float sampleSeconds,
+                    float equilibrium)
+{
+    Gpu gpu;
+    if (!gpu.initialise(false)) { FailHard("No Direct3D 12 capable adapter found."); return false; }
+
+    // The renderer is created for its root signature and its noise volumes -
+    // the forcing pass samples the base noise - but nothing is ever rendered
+    // and no target is allocated.
+    Renderer renderer;
+    if (!renderer.initialise(gpu)) return false;
+    renderer.generateNoise();
+
+    Simulation& sim = renderer.simulation;
+    // Overriding the equilibrium level from the command line is what makes the
+    // cloud-top calibration curve a sweep rather than a rebuild per point.
+    if (equilibrium > 0.0f) sim.sounding.equilibrium = equilibrium;
+    const float interval = 1.0f / (float)sim.stepsPerSecond;
+    const int   steps = (int)(stormSeconds / sim.stepSeconds);
+    const int   every = std::max(1, (int)(sampleSeconds / sim.stepSeconds));
+
+    std::string csv = "time_s,base_m,top_m,updraft_ms,downdraft_ms,condensate,rain,radius_m,cells\n";
+
+    // Band centres as kilometres, so a column header says what height it is.
+    std::string profile = "time_s";
+    for (int b = 0; b < SimStats::kBands; ++b)
+    {
+        char header[32];
+        std::snprintf(header, sizeof(header), ",%.1fkm",
+                      (sim.origin[1] + ((float)b + 0.5f) * sim.extent(1) / SimStats::kBands) * 0.001f);
+        profile += header;
+    }
+    profile += "\n";
+
+    char row[256];
+
+    for (int i = 0; i <= steps; ++i)
+    {
+        const bool sample = (i % every) == 0;
+
+        gpu.beginFrame();
+        sim.advance(interval);
+        if (sample) sim.gatherStats();
+        gpu.submitAndWait();
+
+        if (!sample) continue;
+
+        const SimStats s = sim.fetchStats();
+        const int written = std::snprintf(row, sizeof(row),
+            "%.0f,%.0f,%.0f,%.2f,%.2f,%.3f,%.3f,%.0f,%.0f\n",
+            s.stormTime, s.cloudBase, s.cloudTop, s.updraftMax, s.downdraftMax,
+            s.condensate, s.rain, s.radius, s.cloudyCells);
+        if (written > 0) csv.append(row, (size_t)written);
+
+        std::snprintf(row, sizeof(row), "%.0f", s.stormTime);
+        profile += row;
+        for (int b = 0; b < SimStats::kBands; ++b)
+        {
+            std::snprintf(row, sizeof(row), ",%.5f/%.0f", s.peakByBand[b], s.cellsByBand[b]);
+            profile += row;
+        }
+        profile += "\n";
+    }
+
+    auto write = [](const wchar_t* to, const std::string& text) -> bool
+    {
+        HANDLE file = CreateFileW(to, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                                  FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (file == INVALID_HANDLE_VALUE) return false;
+        DWORD bytes = 0;
+        WriteFile(file, text.data(), (DWORD)text.size(), &bytes, nullptr);
+        CloseHandle(file);
+        return true;
+    };
+
+    // The profile goes beside the summary rather than into it: 32 more columns
+    // would make the file the summary is useful for unreadable.
+    std::wstring profilePath(path);
+    const size_t dot = profilePath.find_last_of(L'.');
+    profilePath.insert(dot == std::wstring::npos ? profilePath.size() : dot, L"-profile");
+
+    const bool ok = write(path, csv) && write(profilePath.c_str(), profile);
+
+    gpu.shutdown();
+    renderer.shutdown();
+    return ok;
+}
+
+bool App::benchmark(UINT width, UINT height, int frames, const wchar_t* path, float atTime)
 {
     Gpu gpu;
     if (!gpu.initialise(false)) { FailHard("No Direct3D 12 capable adapter found."); return false; }
@@ -415,6 +515,20 @@ bool App::benchmark(UINT width, UINT height, int frames, const wchar_t* path)
     if (!renderer.createTarget(width, height)) return false;
     renderer.generateNoise();
 
+    // Run the storm up to the requested moment before timing anything. An
+    // empty sky is not the case the budget has to survive: a mature storm
+    // fills the volume the march crosses, and the frame it costs is the only
+    // one worth quoting.
+    const float step = 1.0f / 30.0f;
+    float clock = 0.0f;
+    for (int i = 0; i < (int)(atTime / step); ++i, clock += step)
+    {
+        gpu.beginFrame();
+        renderer.renderTargets(clock, step);
+        renderer.finishFrame();
+        gpu.submitAndWait();
+    }
+
     auto timeFrames = [&](int count) -> double
     {
         LARGE_INTEGER frequency, start, end;
@@ -423,7 +537,7 @@ bool App::benchmark(UINT width, UINT height, int frames, const wchar_t* path)
         for (int i = 0; i < count; ++i)
         {
             gpu.beginFrame();
-            renderer.renderTargets(1.0f + (float)i * 0.033f, 0.033f);
+            renderer.renderTargets(clock + (float)i * step, step);
             renderer.finishFrame();
             gpu.submitAndWait();
         }
@@ -442,7 +556,8 @@ bool App::benchmark(UINT width, UINT height, int frames, const wchar_t* path)
         "device        %s\n"
         "output        %ux%u\n"
         "cloud march   %ux%u (half resolution)\n"
-        "frames        %d\n\n"
+        "frames        %d\n"
+        "warm-up       %.0f s of display time before timing\n\n"
         "frame         %.2f ms  (%.0f fps uncapped)\n"
         "budget        %.0f%% of a 30 fps frame, %.0f%% of a 60 fps frame\n\n"
         "Includes the simulation step, the light volume rebuild, the cloud\n"
@@ -450,7 +565,7 @@ bool App::benchmark(UINT width, UINT height, int frames, const wchar_t* path)
         "Excludes present. The simulation keeps its own 20 Hz, so a frame\n"
         "carries 0.67 of a step at 30 fps and proportionally less above it.\n",
         Narrow(gpu.adapterName.c_str()).c_str(),
-        width, height, renderer.halfWidth, renderer.halfHeight, frames,
+        width, height, renderer.halfWidth, renderer.halfHeight, frames, atTime,
         ms, 1000.0 / ms, ms / 33.3 * 100.0, ms / 16.7 * 100.0);
 
     HANDLE file = CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,

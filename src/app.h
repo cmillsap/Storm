@@ -22,12 +22,25 @@ public:
     // takes over the display, which makes it almost impossible to inspect while
     // developing; the spikes established that looking at the image is the only
     // way to catch a renderer that is fast and wrong.
-    static bool captureFrame(UINT width, UINT height, float atTime, const wchar_t* path);
+    static bool captureFrame(UINT width, UINT height, float atTime, const wchar_t* path,
+                             bool crossSection = false);
+
+    // Runs the simulation headless and writes one CSV row per sampled interval
+    // of storm time: cloud base and top, peak updraft and downdraft, condensate
+    // and rain mass, cloud radius. No window, no render passes.
+    //
+    // The storm arc is a set of numbers before it is a picture - cloud top has
+    // to track the prescribed equilibrium level, the acts have to change the
+    // storm when they say they do - and a capture cannot measure any of that.
+    // This is the instrument the whole phase is calibrated on.
+    static bool arcReport(const wchar_t* path, float stormSeconds, float sampleSeconds,
+                          float equilibrium = 0.0f);
 
     // Times the render pipeline with no window and no present. Wall clock
     // around a fully synchronised frame, so it is an upper bound that includes
     // CPU submission - every phase from here on wants this number.
-    static bool benchmark(UINT width, UINT height, int frames, const wchar_t* path);
+    static bool benchmark(UINT width, UINT height, int frames, const wchar_t* path,
+                          float atTime = 0.0f);
 
 private:
     static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);

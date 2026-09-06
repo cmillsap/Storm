@@ -115,6 +115,7 @@
     <None Include="shaders\resolve.hlsl" />
     <None Include="shaders\sim.hlsl" />
     <None Include="shaders\sim.hlsli" />
+    <None Include="shaders\slice.hlsl" />
   </ItemGroup>
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
