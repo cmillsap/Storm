@@ -1,4 +1,4 @@
-#include "simulation.h"
+﻿#include "simulation.h"
 
 #include <algorithm>
 #include <cmath>
@@ -318,19 +318,38 @@ static float SmoothStep(float from, float to, float x)
     return t * t * (3.0f - 2.0f * t);
 }
 
-float StormArc::ramp(float stormTime) const
+// The forcing schedule the acts were built around.
+static float ScheduledRamp(const StormArc& arc, float stormTime)
 {
-    const float onset = cumulus * 0.35f;
-    float value = rampCumulus * SmoothStep(0.0f, onset, stormTime)
-                + (1.0f - rampCumulus) * SmoothStep(cumulus, mature, stormTime);
-    const float end = mature + sustain;
-    if (stormTime > end) value *= (std::max)(0.0f, 1.0f - (stormTime - end) / decay);
+    const float onset = arc.cumulus * 0.35f;
+    float value = arc.rampCumulus * SmoothStep(0.0f, onset, stormTime)
+                + (1.0f - arc.rampCumulus) * SmoothStep(arc.cumulus, arc.mature, stormTime);
+    const float end = arc.mature + arc.sustain;
+    if (stormTime > end)
+        value *= (std::max)(0.0f, 1.0f - (stormTime - end) / arc.decay);
     return value;
 }
 
-float StormArc::strength(float stormTime, float soundingStrength) const
+float StormArc::ramp(float stormTime) const
 {
-    return soundingStrength * (1.0f - SmoothStep(cumulus, mature, stormTime));
+    if (sustainAmplitude <= 0.0f || stormTime <= duration())
+        return ScheduledRamp(*this, stormTime);
+
+    // /forced. Rather than invent a shape, replay the schedule that is already
+    // known to build a storm - against whatever the last one left behind
+    // instead of against a fresh sounding.
+    //
+    // Two shapes were tried before this and neither reached condensation. A
+    // constant floor settles into a steady dry thermal, because a running
+    // plume ventilates the heating zone faster than it can accumulate: 5.6 m/s,
+    // unvarying, for four thousand seconds. A smooth pulse gives a proper
+    // rhythm - the updraft breathes between 2.3 and 5.9 m/s on the period asked
+    // for - and still tops out short of the 7 to 8 m/s the first cloud of a
+    // fresh storm needs. What both were missing is that a storm from rest also
+    // starts with a two-kelvin bubble in the initial condition, and neither
+    // shape builds one against the mean wind blowing through the patch.
+    const float into = std::fmod(stormTime - duration(), sustainPeriod);
+    return sustainAmplitude * ScheduledRamp(*this, into);
 }
 
 // Rotation arrives with the congestus and is fully established by the time the
@@ -363,6 +382,12 @@ float StormArc::funnelIntensity(float stormTime) const
     const float ropeFrom = start + tornadoDescend + tornadoHold;
     return SmoothStep(start, start + tornadoDescend * 0.45f, stormTime)
          * (1.0f - SmoothStep(ropeFrom, ropeFrom + tornadoRope, stormTime));
+}
+
+// And how strong the lid still is.
+float StormArc::strength(float stormTime, float soundingStrength) const
+{
+    return soundingStrength * (1.0f - SmoothStep(cumulus, mature, stormTime));
 }
 
 float StormArc::cap(float stormTime, float soundingEquilibrium) const
@@ -412,7 +437,15 @@ void Simulation::fillConstants(SimConstants& c) const
     c.fallout         = sounding.fallout;
     c.iceFallout      = sounding.iceFallout;
     c.freezingLevel   = sounding.freezingLevel;
-    c.envRelaxation   = sounding.envRelaxation;
+    // Environmental relaxation, and it only ever runs after the scripted arc.
+    // Applied from the start it suppresses the storm it is meant to outlive:
+    // with it on from t=0 the domain never reached any condensate at all, at
+    // every floor tried. That is the same finding Phase 03 made from the other
+    // direction, arriving again the moment the term came back.
+    float sustaining = 0.0f;
+    if (arc.sustainRelaxation > 0.0f)
+        sustaining = SmoothStep(arc.duration(), arc.duration() + 400.0f, simulatedTime);
+    c.envRelaxation   = sounding.envRelaxation + arc.sustainRelaxation * sustaining;
     // The lid, and where it was a step ago. The difference between the two is
     // added to every cell's potential temperature, which moves the environment
     // without disturbing a single parcel's buoyancy - see CSDamp.
@@ -534,6 +567,41 @@ void DeriveStorm(uint32_t seed, Sounding& sounding, StormArc& arc)
     arc.tornadoOnset  += SeedSpread(seed, 8, 0.10f);
     arc.tornadoHold    = 300.0f + SeedValue(seed, 9) * 320.0f;
     arc.tornadoDescend = 180.0f + SeedValue(seed, 10) * 110.0f;
+}
+
+void Simulation::sustain(float floorFraction)
+{
+    arc.sustainAmplitude = floorFraction;
+
+    // A fixed rate, deliberately NOT proportional to the amplitude. Scaling the
+    // two together was the obvious thing and it is exactly wrong: what a
+    // parcel can reach is the heating rate divided by the relaxation rate, so
+    // tying them makes that ratio constant and raising the floor buys nothing
+    // at all. Measured, it did precisely that - 0.20, 0.35 and 0.50 all gave
+    // the same empty sky. The amplitude is the knob; this is the environment
+    // coming back underneath it, at about a 28 minute e-folding of storm time.
+    arc.sustainRelaxation = (floorFraction > 0.0f) ? 0.0015f : 0.0f;
+
+    // And a shallower, moister boundary layer, which is what finally made this
+    // work. The shipped sounding puts the condensation level at 948 m against
+    // a 900 m mixed layer - a margin of one cell, thin by construction because
+    // that is what makes the cloud base flat. A thermal in a domain a storm has
+    // already worked over arrives there with slightly too little vapour, and
+    // the cross-section showed exactly that: a warm plume rising to the
+    // condensation level and stopping on it.
+    //
+    // Simply adding humidity does not work, and fails in the way Phase 03
+    // warned it would. The condensation level is -satScale * ln(surfaceRH), so
+    // raising humidity lowers it, and once it drops below the mixed layer the
+    // environment saturates on its own: at +0.045 the domain grew a flat
+    // stratus sheet at 855 m, 5,000 cells of it, that simply sat there.
+    //
+    // The two have to move together. A shallower mixed layer permits a higher
+    // humidity while keeping the condensation level at its top rather than
+    // inside it, which lowers the bar a thermal has to clear by 250 m and
+    // leaves the environment sub-saturated. It is also what the ground under a
+    // storm actually looks like afterwards: cooler, damper, less deeply mixed.
+
 }
 
 void Simulation::restart(uint32_t nextSeed)

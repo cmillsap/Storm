@@ -104,6 +104,9 @@ struct Renderer
     // Nothing is forced after the arc ends, so what is on screen from then on
     // is whatever the solver does with what the storm left behind.
     bool freeRun = false;
+    // /forced. A floor under the boundary-layer forcing, applied to the arc
+    // whenever a storm is derived. Zero is the shipped behaviour.
+    float sustainedForcing = 0.0f;
     // Set when the saver has been up long enough that the user has plainly
     // gone home. The last frame stays on screen; nothing is stepped or marched.
     bool idle = false;

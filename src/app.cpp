@@ -175,12 +175,14 @@ bool App::createPreviewView(HWND previewWindow)
                              (UINT)std::max<LONG>(1, rc.bottom - rc.top));
 }
 
-bool App::initialise(HINSTANCE instance, Mode mode, HWND previewWindow, bool freeRun)
+bool App::initialise(HINSTANCE instance, Mode mode, HWND previewWindow, bool freeRun,
+                     float sustainedForcing)
 {
     s_instance = this;
     m_instance = instance;
     m_mode = mode;
     m_freeRun = freeRun;
+    m_sustainedForcing = sustainedForcing;
     m_startTick = GetTickCount();
 
     WNDCLASSEXW wc = {};
@@ -254,6 +256,8 @@ int App::run()
     m_settings = Settings::load();
     m_renderer.cycleStorms = m_settings.cycleStorms && !m_freeRun;
     m_renderer.freeRun = m_freeRun;
+    m_renderer.sustainedForcing = m_sustainedForcing;
+    m_renderer.simulation.sustain(m_sustainedForcing);
 
     // On battery, whatever the settings say: half the frame rate and never the
     // top tier. This is the "power and thermals" risk the plan has carried
@@ -364,7 +368,8 @@ int App::run()
 // ------------------------------------------------------------------ capture
 
 bool App::captureFrame(UINT width, UINT height, float atTime, const wchar_t* path,
-                       bool crossSection, float distance, float aimHeight, bool freeRun)
+                       bool crossSection, float distance, float aimHeight, bool freeRun,
+                       float sustainedForcing)
 {
     Gpu gpu;
     if (!gpu.initialise(false)) { FailHard("No Direct3D 12 capable adapter found."); return false; }
@@ -378,6 +383,8 @@ bool App::captureFrame(UINT width, UINT height, float atTime, const wchar_t* pat
 
     renderer.freeRun = freeRun;
     if (freeRun) renderer.cycleStorms = false;
+    renderer.sustainedForcing = sustainedForcing;
+    renderer.simulation.sustain(sustainedForcing);
 
     if (distance > 0.0f)
     {
@@ -519,7 +526,7 @@ bool App::captureFrame(UINT width, UINT height, float atTime, const wchar_t* pat
 }
 
 bool App::arcReport(const wchar_t* path, float stormSeconds, float sampleSeconds,
-                    float equilibrium, float rotation, float shear)
+                    float equilibrium, float rotation, float shear, float sustainedForcing)
 {
     Gpu gpu;
     if (!gpu.initialise(false)) { FailHard("No Direct3D 12 capable adapter found."); return false; }
@@ -537,6 +544,7 @@ bool App::arcReport(const wchar_t* path, float stormSeconds, float sampleSeconds
     if (equilibrium > 0.0f) sim.sounding.equilibrium = equilibrium;
     if (rotation >= 0.0f)   sim.sounding.rotationSpeed = rotation;
     if (shear >= 0.0f)      sim.sounding.shear[0] = shear;
+    sim.sustain(sustainedForcing);
     const float interval = 1.0f / (float)sim.stepsPerSecond;
     const int   steps = (int)(stormSeconds / sim.stepSeconds);
     const int   every = std::max(1, (int)(sampleSeconds / sim.stepSeconds));

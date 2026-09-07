@@ -263,6 +263,23 @@ struct StormArc
     // lid clearing at 1500 s, the tower reached 8.3 km at 1000 s, punched into
     // an inversion that was still at 6.2 km, and had rained itself out by the
     // time the way was open.
+    // A floor under the forcing, normally zero. /forced raises it, which is
+    // the difference between watching a storm die and watching a sky keep
+    // working: the arc ramps the boundary-layer heating to nothing at the end
+    // of the decay, and after that there is no energy going into the domain at
+    // all. Held at a fraction instead, the same heat source keeps running
+    // under whatever the storm left behind.
+    // /forced. Not a floor under the forcing but a pulse, which is a
+    // distinction the solver insisted on: held at a constant level the heat
+    // source settles into a steady dry thermal - 5.6 m/s, unvarying for four
+    // thousand seconds, never once condensing - because a running plume
+    // ventilates the heating zone faster than it can accumulate anything. The
+    // original storm only got going because it started from still air. So each
+    // pulse starts from still air too.
+    float sustainAmplitude = 0.0f;    // 0 disables the whole thing
+    float sustainPeriod    = 2600.0f; // s - one full replay of the schedule
+    float sustainRelaxation = 0.0f;   // per second, and only after the arc
+
     float cumulus    = 250.0f;    // s - shallow, under an intact lid
     float congestus  = 500.0f;    // s - the lid erodes, towers reach mid-level
     float mature     = 800.0f;    // s - the lid is gone, the tower reaches the cap
@@ -455,6 +472,21 @@ struct Simulation
     bool advance(float elapsedSeconds);
 
     void reset();                                     // re-seed the domain
+
+    // Keeps the sky working after the arc has run out, for /forced.
+    //
+    // A floor under the forcing is not enough on its own, and measuring that
+    // was worth the trouble: with the floor alone at 0.15, 0.30 and even 0.45,
+    // domain condensate still collapsed from 4.5 to 0.01 by 4000 seconds and
+    // never came back. The reason is that a storm's job is to consume the
+    // instability it grew in, and nothing here puts it back - the environmental
+    // relaxation that would has been at zero since Phase 03, where it was found
+    // to be quietly subtracting from the forcing.
+    //
+    // So this raises both together: heat going in, and an environment being
+    // restored for it to work on. That pair is what a real sky has and a closed
+    // box does not.
+    void sustain(float floorFraction);
 
     // Ends this storm and starts a different one. The screensaver runs all
     // night; one storm is two and a half minutes.

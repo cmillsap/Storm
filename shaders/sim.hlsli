@@ -234,6 +234,20 @@ float rotationTarget(float3 p, out float2 tangent)
     return gRotationSpeed * profile * window;
 }
 
+// How strongly the forcing is acting at a point, 0 to 1. Shared by the pass
+// that applies the forcing and the one that relaxes the environment, because
+// the second must not undo the first: they write the same field in the same
+// clear air, and a relaxation that includes the heated patch caps what a
+// parcel can reach at the heating rate divided by the relaxation rate. Cloud
+// is already exempt for the same reason; this is the other exemption.
+float forcingWeight(float3 p)
+{
+    float3 d = p - gForceCentre;
+    float r2 = dot(d.xz, d.xz) / (gForceRadius * gForceRadius)
+             + (d.y * d.y) / (gForceDepth * gForceDepth);
+    return (r2 < 9.0) ? exp(-r2) : 0.0;
+}
+
 // 0 through the interior, rising to 1 at the very edge of the domain. The
 // sides are periodic because the pressure solve wants them to be, so without
 // this an anvil that reaches one edge comes back in at the other - which the

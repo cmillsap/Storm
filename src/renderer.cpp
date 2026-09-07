@@ -613,6 +613,7 @@ void Renderer::renderTargets(float timeSeconds, float deltaSeconds)
     if (directorEnabled && cycleStorms && simulation.finished())
     {
         simulation.restart(simulation.seed + 1);
+        simulation.sustain(sustainedForcing);   // survives the new arc
         director.create(simulation);
         historyValid = false;         // nothing on screen survives the cut
         lightVolumeReady = false;

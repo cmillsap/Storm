@@ -461,9 +461,22 @@ void CSDamp(uint3 tid : SV_DispatchThreadID)
         // clear air, for the same reason the wind is: nothing else in a
         // periodic domain holds the sounding the storm is growing in. Cloud is
         // exempt, or the storm would be nudged out of existence.
-        float aEnv = saturate(a + gEnvRelaxation * gSimDt * (1.0 - cloudy));
-        s.r = lerp(s.r, thetaEnv(p.y),  aEnv);
-        s.g = lerp(s.g, vapourEnv(p.y), aEnv);
+        // Temperature and moisture want opposite treatment inside the forcing
+        // patch, which is not obvious until it costs you a cloud.
+        //
+        // Heat there must be left alone: relaxing it is subtracting from the
+        // forcing with one hand what it adds with the other, and it caps what a
+        // parcel can reach at the heating rate over the relaxation rate.
+        // Moisture there must NOT be left alone: the reservoir the parcel lifts
+        // is the mixed layer's vapour, the last storm consumed it, and the
+        // forcing's own trickle does not refill it. Exempting both put the
+        // updraft at 7.1 m/s - the value a fresh storm first condenses at - with
+        // the air too dry to do anything with it.
+        float aTheta  = saturate(a + gEnvRelaxation * gSimDt
+                                     * (1.0 - max(cloudy, forcingWeight(p))));
+        float aVapour = saturate(a + gEnvRelaxation * gSimDt * (1.0 - cloudy));
+        s.r = lerp(s.r, thetaEnv(p.y),  aTheta);
+        s.g = lerp(s.g, vapourEnv(p.y), aVapour);
         s.b = lerp(s.b, 0.0, a);
         s.a = lerp(s.a, 0.0, a);
         writeS(c, s);

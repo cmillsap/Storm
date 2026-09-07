@@ -230,12 +230,35 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR commandLine, int)
     // of the raw line rather than the tokens - so a modifier that could precede
     // the mode would have to be excluded from that substring, and the .scr
     // contract is not the place to be clever.
-    bool freeRun = false;
+    bool  freeRun = false;
+    float sustainedForcing = 0.0f;
     for (size_t i = 1; i < tokens.size(); ++i)
     {
         std::wstring modifier = tokens[i];
         std::transform(modifier.begin(), modifier.end(), modifier.begin(), ::towlower);
+
         if (modifier == L"/free" || modifier == L"-free") freeRun = true;
+
+        // /forced, or /forced:0.45 to say how hard. It keeps the storm running
+        // too - a floor under the forcing is pointless if the domain is reset
+        // five seconds after it starts to matter - so it implies /free.
+        if (modifier.rfind(L"/forced", 0) == 0 || modifier.rfind(L"-forced", 0) == 0)
+        {
+            freeRun = true;
+            const size_t colon = modifier.find_first_of(L":=");
+            // A multiple of the arc's peak forcing, not a fraction of it, and
+            // it has to be: a storm from rest also gets a two-kelvin bubble in
+            // its initial condition, and a rate has to exceed what the arc ever
+            // asks for to stand in for one. Below about 2 nothing condenses at
+            // all - the thermals rise to the condensation level and stop on it.
+            sustainedForcing = (colon == std::wstring::npos)
+                             ? 3.5f
+                             : (float)_wtof(modifier.c_str() + colon + 1);
+            // Above 1 is allowed: a storm from rest also gets a two-kelvin
+            // bubble in its initial condition, and the only way to stand in for
+            // that with a rate is to exceed what the arc ever asks for.
+            sustainedForcing = std::min(std::max(sustainedForcing, 0.0f), 6.0f);
+        }
     }
 
     if (command == L"/capture" || command == L"-capture")
@@ -248,7 +271,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR commandLine, int)
         const float t = (tokens.size() > 4) ? (float)_wtof(tokens[4].c_str()) : 0.0f;
         const float d = (tokens.size() > 5) ? (float)_wtof(tokens[5].c_str()) : 0.0f;
         const float a = (tokens.size() > 6) ? (float)_wtof(tokens[6].c_str()) : 0.0f;
-        return App::captureFrame(w, h, t, tokens[1].c_str(), false, d, a, freeRun) ? 0 : 1;
+        return App::captureFrame(w, h, t, tokens[1].c_str(), false, d, a, freeRun,
+                                 sustainedForcing) ? 0 : 1;
     }
 
     if (command == L"/bench" || command == L"-bench")
@@ -269,7 +293,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR commandLine, int)
         const UINT  w = (tokens.size() > 2) ? (UINT)_wtoi(tokens[2].c_str()) : 1280u;
         const UINT  h = (tokens.size() > 3) ? (UINT)_wtoi(tokens[3].c_str()) : 720u;
         const float t = (tokens.size() > 4) ? (float)_wtof(tokens[4].c_str()) : 0.0f;
-        return App::captureFrame(w, h, t, tokens[1].c_str(), true) ? 0 : 1;
+        return App::captureFrame(w, h, t, tokens[1].c_str(), true, 0.0f, 0.0f,
+                                 freeRun, sustainedForcing) ? 0 : 1;
     }
 
     if (command == L"/arc" || command == L"-arc")
@@ -281,7 +306,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR commandLine, int)
         const float el    = (tokens.size() > 4) ? (float)_wtof(tokens[4].c_str()) : 0.0f;
         const float rot   = (tokens.size() > 5) ? (float)_wtof(tokens[5].c_str()) : -1.0f;
         const float shear = (tokens.size() > 6) ? (float)_wtof(tokens[6].c_str()) : -1.0f;
-        return App::arcReport(out, total, every, el, rot, shear) ? 0 : 1;
+        return App::arcReport(out, total, every, el, rot, shear, sustainedForcing) ? 0 : 1;
     }
 
     if (command == L"/probe" || command == L"-probe")
@@ -301,7 +326,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR commandLine, int)
     {
         KillOtherInstances();
         App app;
-        if (!app.initialise(instance, Mode::FullScreen, nullptr, freeRun)) { app.shutdown(); return 1; }
+        if (!app.initialise(instance, Mode::FullScreen, nullptr, freeRun, sustainedForcing))
+        { app.shutdown(); return 1; }
         const int result = app.run();
         app.shutdown();
         return result;
@@ -325,7 +351,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR commandLine, int)
     if (flag == L"/w" || flag == L"-w")
     {
         App app;
-        if (!app.initialise(instance, Mode::Windowed, nullptr, freeRun)) { app.shutdown(); return 1; }
+        if (!app.initialise(instance, Mode::Windowed, nullptr, freeRun, sustainedForcing))
+        { app.shutdown(); return 1; }
         const int result = app.run();
         app.shutdown();
         return result;

@@ -17,7 +17,8 @@ class App
 public:
     // freeRun is /free: never reset the storm, and watch what is left of it
     // from an orbiting camera once the arc has run out.
-    bool initialise(HINSTANCE instance, Mode mode, HWND previewWindow, bool freeRun = false);
+    bool initialise(HINSTANCE instance, Mode mode, HWND previewWindow, bool freeRun = false,
+                    float sustainedForcing = 0.0f);
     int  run();
     void shutdown();
 
@@ -31,7 +32,8 @@ public:
     // wide from 18 km, which is honest and useless for looking at one.
     static bool captureFrame(UINT width, UINT height, float atTime, const wchar_t* path,
                              bool crossSection = false, float distance = 0.0f,
-                             float aimHeight = 0.0f, bool freeRun = false);
+                             float aimHeight = 0.0f, bool freeRun = false,
+                             float sustainedForcing = 0.0f);
 
     // Runs the simulation headless and writes one CSV row per sampled interval
     // of storm time: cloud base and top, peak updraft and downdraft, condensate
@@ -43,7 +45,7 @@ public:
     // This is the instrument the whole phase is calibrated on.
     static bool arcReport(const wchar_t* path, float stormSeconds, float sampleSeconds,
                           float equilibrium = 0.0f, float rotation = -1.0f,
-                          float shear = -1.0f);
+                          float shear = -1.0f, float sustainedForcing = 0.0f);
 
     // Times the render pipeline with no window and no present. Wall clock
     // around a fully synchronised frame, so it is an upper bound that includes
@@ -67,6 +69,7 @@ private:
     HINSTANCE m_instance = nullptr;
     Mode      m_mode = Mode::FullScreen;
     bool      m_freeRun = false;
+    float     m_sustainedForcing = 0.0f;
     bool      m_running = false;
 
     Gpu       m_gpu;

@@ -57,6 +57,7 @@ the image is the only way to catch a renderer that is fast and wrong.
 | `/bench [file.txt] [w h] [frames] [warm-up s]` | Time the render pipeline |
 | `/probe [file.txt]` | Report the monitor layout and the mirroring arithmetic |
 | `/free` | Never reset the storm; watch what is left of it |
+| `/forced[:n]` | As `/free`, but keep forcing the boundary layer so the sky works on |
 
 `/arc` and `/slice` are Phase 03's, and between them they are why that phase
 landed. `/arc` runs the solver with no window and no render passes and writes a
@@ -74,7 +75,21 @@ is 21 km out aimed at 5 km, which is the worst place to watch from when what
 survives a storm is near the ground. Nothing is forced after the arc ends, so
 what happens from then on is whatever the solver does with what the storm left
 behind: on the shipped sounding that is about a minute of sheared outflow
-remnants before they evaporate.
+remnants before they evaporate. `/forced` is what keeps it going.
+
+`/forced` implies `/free` and adds one thing: after the arc has run out it
+replays the arc's own forcing schedule, over and over, against whatever the
+last storm left behind rather than against a fresh sounding. New cumulus grow
+in the old storm's wake every couple of minutes. There is no mesocyclone and no
+lid by then, so they are ordinary convection - congestus reaching four or five
+kilometres, not supercells.
+
+The optional number is a **multiple of the arc's peak forcing**, defaulting to
+3.5, and it has to be a multiple rather than a fraction. A storm growing from
+rest also gets a two-kelvin bubble handed to it in the initial condition, and a
+rate has to exceed anything the arc asks for to stand in for one. Below about
+2.0 nothing condenses at all: the thermals rise to the condensation level and
+stop dead on it, which `/slice` shows very clearly.
 
 `/capture`'s optional `distance` stands the camera that many metres off the
 storm on its inflow side and re-aims it, instead of the shipped 18 km. It is
