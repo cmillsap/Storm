@@ -628,7 +628,9 @@ void Renderer::renderTargets(float timeSeconds, float deltaSeconds)
         // The camera. Through Phase 04 this was one fixed viewpoint with a
         // slow yaw oscillation on it; Phase 05 hands it to the director, which
         // flies the acts.
-        if (directorEnabled)
+        if (directorEnabled && freeRun && simulation.finished())
+            target.camera = director.observe(timeSeconds, simulation);
+        else if (directorEnabled)
             target.camera = director.frame(simulation.simulatedTime, timeSeconds, simulation);
         else
             target.camera.yaw = target.camera.baseYaw + 0.09f * std::sin(timeSeconds * 0.021f);

@@ -56,6 +56,7 @@ the image is the only way to catch a renderer that is fast and wrong.
 | `/arc [file.csv] [storm s] [interval] [EL m] [rotation] [shear]` | Run the storm headless and measure it |
 | `/bench [file.txt] [w h] [frames] [warm-up s]` | Time the render pipeline |
 | `/probe [file.txt]` | Report the monitor layout and the mirroring arithmetic |
+| `/free` | Never reset the storm; watch what is left of it |
 
 `/arc` and `/slice` are Phase 03's, and between them they are why that phase
 landed. `/arc` runs the solver with no window and no render passes and writes a
@@ -65,6 +66,15 @@ updraft-vorticity correlation and peak vorticity - plus a second file giving
 peak condensate and cloudy-cell count in each of 32 height bands. `/slice` draws the
 fields themselves rather than the sky. Almost every wrong turn below was found
 in one of those two and would not have been visible in a screenshot.
+
+`/free` is a modifier rather than a mode, and goes after one: `Storm.scr /w /free`.
+It stops the storm cycling and, once the arc has run out, swaps the camera from
+the acts to a slow low orbit around the domain — the shot list's last keyframe
+is 21 km out aimed at 5 km, which is the worst place to watch from when what
+survives a storm is near the ground. Nothing is forced after the arc ends, so
+what happens from then on is whatever the solver does with what the storm left
+behind: on the shipped sounding that is about a minute of sheared outflow
+remnants before they evaporate.
 
 `/capture`'s optional `distance` stands the camera that many metres off the
 storm on its inflow side and re-aims it, instead of the shipped 18 km. It is

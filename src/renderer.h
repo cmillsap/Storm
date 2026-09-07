@@ -99,6 +99,11 @@ struct Renderer
     // moves this when the settings say Automatic.
     int  qualityTier = 0;
     bool cycleStorms = true;
+    // /free. The storm is never reset, and once it is over the camera stops
+    // filming the acts and settles into a slow observation orbit instead.
+    // Nothing is forced after the arc ends, so what is on screen from then on
+    // is whatever the solver does with what the storm left behind.
+    bool freeRun = false;
     // Set when the saver has been up long enough that the user has plainly
     // gone home. The last frame stays on screen; nothing is stepped or marched.
     bool idle = false;

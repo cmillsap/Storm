@@ -49,4 +49,12 @@ struct Director
     // The camera for a moment of storm time. displaySeconds drives only the
     // drift, which belongs on the display's clock rather than the storm's.
     Camera frame(float stormTime, float displaySeconds, const Simulation& sim) const;
+
+    // The observation camera, for /free. Once the storm is over there is no
+    // script left to film, and the shot list's last keyframe - 21 km out and
+    // aimed at 5 km - is the worst possible place to watch from: what survives
+    // a storm is low, and a long way below the middle of that frame. This is a
+    // slow orbit at a few kilometres, aimed near the ground, that keeps moving
+    // so the whole domain floor comes past eventually.
+    Camera observe(float displaySeconds, const Simulation& sim) const;
 };

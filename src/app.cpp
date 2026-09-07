@@ -175,11 +175,12 @@ bool App::createPreviewView(HWND previewWindow)
                              (UINT)std::max<LONG>(1, rc.bottom - rc.top));
 }
 
-bool App::initialise(HINSTANCE instance, Mode mode, HWND previewWindow)
+bool App::initialise(HINSTANCE instance, Mode mode, HWND previewWindow, bool freeRun)
 {
     s_instance = this;
     m_instance = instance;
     m_mode = mode;
+    m_freeRun = freeRun;
     m_startTick = GetTickCount();
 
     WNDCLASSEXW wc = {};
@@ -251,7 +252,8 @@ void App::adaptQuality(float frameMilliseconds)
 int App::run()
 {
     m_settings = Settings::load();
-    m_renderer.cycleStorms = m_settings.cycleStorms;
+    m_renderer.cycleStorms = m_settings.cycleStorms && !m_freeRun;
+    m_renderer.freeRun = m_freeRun;
 
     // On battery, whatever the settings say: half the frame rate and never the
     // top tier. This is the "power and thermals" risk the plan has carried
@@ -362,7 +364,7 @@ int App::run()
 // ------------------------------------------------------------------ capture
 
 bool App::captureFrame(UINT width, UINT height, float atTime, const wchar_t* path,
-                       bool crossSection, float distance, float aimHeight)
+                       bool crossSection, float distance, float aimHeight, bool freeRun)
 {
     Gpu gpu;
     if (!gpu.initialise(false)) { FailHard("No Direct3D 12 capable adapter found."); return false; }
@@ -373,6 +375,9 @@ bool App::captureFrame(UINT width, UINT height, float atTime, const wchar_t* pat
     renderer.generateNoise();
 
     RenderTarget& target = renderer.targets[0];
+
+    renderer.freeRun = freeRun;
+    if (freeRun) renderer.cycleStorms = false;
 
     if (distance > 0.0f)
     {

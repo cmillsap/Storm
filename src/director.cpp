@@ -118,3 +118,32 @@ Camera Director::frame(float stormTime, float displaySeconds, const Simulation& 
     camera.fovDegrees = fov;
     return camera;
 }
+
+Camera Director::observe(float displaySeconds, const Simulation& sim) const
+{
+    Camera camera;
+
+    // Three periods that do not divide into each other, so the view never
+    // quite repeats: one for the orbit, one for how far out it stands, one for
+    // how high it looks. Slow - this is for watching something evolve over
+    // minutes, and a camera moving faster than its subject is a distraction.
+    const float azimuth  = displaySeconds * 2.0f * kPi / 320.0f;
+    const float distance = 8500.0f + 3200.0f * std::sin(displaySeconds * 2.0f * kPi / 197.0f);
+    const float aim      = 1100.0f +  650.0f * std::sin(displaySeconds * 2.0f * kPi / 143.0f);
+
+    // Centred on the domain rather than on the mesocyclone axis the acts are
+    // built around: whatever is left after the storm is spread across the
+    // floor of the box, not gathered where the updraft used to be.
+    const float centreX = sim.centre(0);
+    const float centreZ = sim.centre(2);
+
+    camera.position[0] = centreX + std::sin(azimuth) * distance;
+    camera.position[1] = 240.0f;
+    camera.position[2] = centreZ - std::cos(azimuth) * distance;
+
+    camera.baseYaw = std::atan2(centreX - camera.position[0], centreZ - camera.position[2]);
+    camera.yaw = camera.baseYaw;
+    camera.pitch = std::atan2(aim - camera.position[1], distance);
+    camera.fovDegrees = 55.0f;
+    return camera;
+}

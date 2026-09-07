@@ -225,16 +225,30 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR commandLine, int)
     std::wstring command = tokens.empty() ? L"" : tokens[0];
     std::transform(command.begin(), command.end(), command.begin(), ::towlower);
 
+    // Modifiers are looked for after the mode, never before it. Windows passes
+    // the mode flag first and nothing else, and /p in particular is parsed out
+    // of the raw line rather than the tokens - so a modifier that could precede
+    // the mode would have to be excluded from that substring, and the .scr
+    // contract is not the place to be clever.
+    bool freeRun = false;
+    for (size_t i = 1; i < tokens.size(); ++i)
+    {
+        std::wstring modifier = tokens[i];
+        std::transform(modifier.begin(), modifier.end(), modifier.begin(), ::towlower);
+        if (modifier == L"/free" || modifier == L"-free") freeRun = true;
+    }
+
     if (command == L"/capture" || command == L"-capture")
     {
         // /capture <file.bmp> [w h] [seconds] [camera distance m] [aim height m]
+        // ... and /free, to capture past where the storm would have reset.
         if (tokens.size() < 2) return 1;
         const UINT  w = (tokens.size() > 2) ? (UINT)_wtoi(tokens[2].c_str()) : 1720u;
         const UINT  h = (tokens.size() > 3) ? (UINT)_wtoi(tokens[3].c_str()) : 720u;
         const float t = (tokens.size() > 4) ? (float)_wtof(tokens[4].c_str()) : 0.0f;
         const float d = (tokens.size() > 5) ? (float)_wtof(tokens[5].c_str()) : 0.0f;
         const float a = (tokens.size() > 6) ? (float)_wtof(tokens[6].c_str()) : 0.0f;
-        return App::captureFrame(w, h, t, tokens[1].c_str(), false, d, a) ? 0 : 1;
+        return App::captureFrame(w, h, t, tokens[1].c_str(), false, d, a, freeRun) ? 0 : 1;
     }
 
     if (command == L"/bench" || command == L"-bench")
@@ -287,7 +301,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR commandLine, int)
     {
         KillOtherInstances();
         App app;
-        if (!app.initialise(instance, Mode::FullScreen, nullptr)) { app.shutdown(); return 1; }
+        if (!app.initialise(instance, Mode::FullScreen, nullptr, freeRun)) { app.shutdown(); return 1; }
         const int result = app.run();
         app.shutdown();
         return result;
@@ -311,7 +325,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR commandLine, int)
     if (flag == L"/w" || flag == L"-w")
     {
         App app;
-        if (!app.initialise(instance, Mode::Windowed, nullptr)) { app.shutdown(); return 1; }
+        if (!app.initialise(instance, Mode::Windowed, nullptr, freeRun)) { app.shutdown(); return 1; }
         const int result = app.run();
         app.shutdown();
         return result;

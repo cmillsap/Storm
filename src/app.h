@@ -15,7 +15,9 @@ enum class Mode
 class App
 {
 public:
-    bool initialise(HINSTANCE instance, Mode mode, HWND previewWindow);
+    // freeRun is /free: never reset the storm, and watch what is left of it
+    // from an orbiting camera once the arc has run out.
+    bool initialise(HINSTANCE instance, Mode mode, HWND previewWindow, bool freeRun = false);
     int  run();
     void shutdown();
 
@@ -29,7 +31,7 @@ public:
     // wide from 18 km, which is honest and useless for looking at one.
     static bool captureFrame(UINT width, UINT height, float atTime, const wchar_t* path,
                              bool crossSection = false, float distance = 0.0f,
-                             float aimHeight = 0.0f);
+                             float aimHeight = 0.0f, bool freeRun = false);
 
     // Runs the simulation headless and writes one CSV row per sampled interval
     // of storm time: cloud base and top, peak updraft and downdraft, condensate
@@ -64,6 +66,7 @@ private:
 
     HINSTANCE m_instance = nullptr;
     Mode      m_mode = Mode::FullScreen;
+    bool      m_freeRun = false;
     bool      m_running = false;
 
     Gpu       m_gpu;
