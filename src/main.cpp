@@ -222,26 +222,36 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR commandLine, int)
         }
     }
 
-    std::wstring command = tokens.empty() ? L"" : tokens[0];
-    std::transform(command.begin(), command.end(), command.begin(), ::towlower);
-
-    // Modifiers are looked for after the mode, never before it. Windows passes
-    // the mode flag first and nothing else, and /p in particular is parsed out
-    // of the raw line rather than the tokens - so a modifier that could precede
-    // the mode would have to be excluded from that substring, and the .scr
-    // contract is not the place to be clever.
+    // Modifiers may appear anywhere, in any order, with or without a mode.
+    //
+    // They used to be looked for only after the mode, and the mode itself was
+    // taken from the first two characters of the raw command line - so
+    // "/free /forced" read as the flag "/f", matched no mode, and fell through
+    // to the settings dialog. Silently opening the wrong thing is a poor answer
+    // to a command line that is asking for something perfectly clear.
+    //
+    // They are pulled out of the list entirely rather than skipped in place,
+    // because everything downstream reads positionally: /capture takes its
+    // width from the third token, and a modifier left sitting anywhere before
+    // it would quietly shift them all along by one.
     bool  freeRun = false;
     float sustainedForcing = 0.0f;
-    for (size_t i = 1; i < tokens.size(); ++i)
+    std::vector<std::wstring> args;
+
+    for (const std::wstring& token : tokens)
     {
-        std::wstring modifier = tokens[i];
+        std::wstring modifier = token;
         std::transform(modifier.begin(), modifier.end(), modifier.begin(), ::towlower);
 
-        if (modifier == L"/free" || modifier == L"-free") freeRun = true;
+        if (modifier == L"/free" || modifier == L"-free")
+        {
+            freeRun = true;
+            continue;
+        }
 
-        // /forced, or /forced:0.45 to say how hard. It keeps the storm running
-        // too - a floor under the forcing is pointless if the domain is reset
-        // five seconds after it starts to matter - so it implies /free.
+        // /forced, or /forced:2.5 to say how hard. It keeps the storm running
+        // too - forcing a domain that is reset five seconds later is pointless
+        // - so it implies /free.
         if (modifier.rfind(L"/forced", 0) == 0 || modifier.rfind(L"-forced", 0) == 0)
         {
             freeRun = true;
@@ -254,72 +264,95 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR commandLine, int)
             sustainedForcing = (colon == std::wstring::npos)
                              ? 3.5f
                              : (float)_wtof(modifier.c_str() + colon + 1);
-            // Above 1 is allowed: a storm from rest also gets a two-kelvin
-            // bubble in its initial condition, and the only way to stand in for
-            // that with a rate is to exceed what the arc ever asks for.
             sustainedForcing = std::min(std::max(sustainedForcing, 0.0f), 6.0f);
+            continue;
         }
+
+        args.push_back(token);
     }
+
+    std::wstring command = args.empty() ? L"" : args[0];
+    std::transform(command.begin(), command.end(), command.begin(), ::towlower);
 
     if (command == L"/capture" || command == L"-capture")
     {
         // /capture <file.bmp> [w h] [seconds] [camera distance m] [aim height m]
         // ... and /free, to capture past where the storm would have reset.
-        if (tokens.size() < 2) return 1;
-        const UINT  w = (tokens.size() > 2) ? (UINT)_wtoi(tokens[2].c_str()) : 1720u;
-        const UINT  h = (tokens.size() > 3) ? (UINT)_wtoi(tokens[3].c_str()) : 720u;
-        const float t = (tokens.size() > 4) ? (float)_wtof(tokens[4].c_str()) : 0.0f;
-        const float d = (tokens.size() > 5) ? (float)_wtof(tokens[5].c_str()) : 0.0f;
-        const float a = (tokens.size() > 6) ? (float)_wtof(tokens[6].c_str()) : 0.0f;
-        return App::captureFrame(w, h, t, tokens[1].c_str(), false, d, a, freeRun,
+        if (args.size() < 2) return 1;
+        const UINT  w = (args.size() > 2) ? (UINT)_wtoi(args[2].c_str()) : 1720u;
+        const UINT  h = (args.size() > 3) ? (UINT)_wtoi(args[3].c_str()) : 720u;
+        const float t = (args.size() > 4) ? (float)_wtof(args[4].c_str()) : 0.0f;
+        const float d = (args.size() > 5) ? (float)_wtof(args[5].c_str()) : 0.0f;
+        const float a = (args.size() > 6) ? (float)_wtof(args[6].c_str()) : 0.0f;
+        return App::captureFrame(w, h, t, args[1].c_str(), false, d, a, freeRun,
                                  sustainedForcing) ? 0 : 1;
     }
 
     if (command == L"/bench" || command == L"-bench")
     {
         // /bench <file.txt> [width height] [frames] [seconds to warm up to]
-        const wchar_t* out = (tokens.size() > 1) ? tokens[1].c_str() : L"storm-bench.txt";
-        const UINT w = (tokens.size() > 2) ? (UINT)_wtoi(tokens[2].c_str()) : 3440u;
-        const UINT h = (tokens.size() > 3) ? (UINT)_wtoi(tokens[3].c_str()) : 1440u;
-        const int  n = (tokens.size() > 4) ? _wtoi(tokens[4].c_str()) : 120;
-        const float t = (tokens.size() > 5) ? (float)_wtof(tokens[5].c_str()) : 0.0f;
+        const wchar_t* out = (args.size() > 1) ? args[1].c_str() : L"storm-bench.txt";
+        const UINT w = (args.size() > 2) ? (UINT)_wtoi(args[2].c_str()) : 3440u;
+        const UINT h = (args.size() > 3) ? (UINT)_wtoi(args[3].c_str()) : 1440u;
+        const int  n = (args.size() > 4) ? _wtoi(args[4].c_str()) : 120;
+        const float t = (args.size() > 5) ? (float)_wtof(args[5].c_str()) : 0.0f;
         return App::benchmark(w, h, n, out, t) ? 0 : 1;
     }
 
     if (command == L"/slice" || command == L"-slice")
     {
         // /slice <file.bmp> [width height] [seconds] - the fields, not the sky
-        if (tokens.size() < 2) return 1;
-        const UINT  w = (tokens.size() > 2) ? (UINT)_wtoi(tokens[2].c_str()) : 1280u;
-        const UINT  h = (tokens.size() > 3) ? (UINT)_wtoi(tokens[3].c_str()) : 720u;
-        const float t = (tokens.size() > 4) ? (float)_wtof(tokens[4].c_str()) : 0.0f;
-        return App::captureFrame(w, h, t, tokens[1].c_str(), true, 0.0f, 0.0f,
+        if (args.size() < 2) return 1;
+        const UINT  w = (args.size() > 2) ? (UINT)_wtoi(args[2].c_str()) : 1280u;
+        const UINT  h = (args.size() > 3) ? (UINT)_wtoi(args[3].c_str()) : 720u;
+        const float t = (args.size() > 4) ? (float)_wtof(args[4].c_str()) : 0.0f;
+        return App::captureFrame(w, h, t, args[1].c_str(), true, 0.0f, 0.0f,
                                  freeRun, sustainedForcing) ? 0 : 1;
     }
 
     if (command == L"/arc" || command == L"-arc")
     {
         // /arc <file.csv> [storm s] [interval] [EL m] [rotation m/s] [shear m/s/km]
-        const wchar_t* out = (tokens.size() > 1) ? tokens[1].c_str() : L"storm-arc.csv";
-        const float total = (tokens.size() > 2) ? (float)_wtof(tokens[2].c_str()) : 900.0f;
-        const float every = (tokens.size() > 3) ? (float)_wtof(tokens[3].c_str()) : 10.0f;
-        const float el    = (tokens.size() > 4) ? (float)_wtof(tokens[4].c_str()) : 0.0f;
-        const float rot   = (tokens.size() > 5) ? (float)_wtof(tokens[5].c_str()) : -1.0f;
-        const float shear = (tokens.size() > 6) ? (float)_wtof(tokens[6].c_str()) : -1.0f;
+        const wchar_t* out = (args.size() > 1) ? args[1].c_str() : L"storm-arc.csv";
+        const float total = (args.size() > 2) ? (float)_wtof(args[2].c_str()) : 900.0f;
+        const float every = (args.size() > 3) ? (float)_wtof(args[3].c_str()) : 10.0f;
+        const float el    = (args.size() > 4) ? (float)_wtof(args[4].c_str()) : 0.0f;
+        const float rot   = (args.size() > 5) ? (float)_wtof(args[5].c_str()) : -1.0f;
+        const float shear = (args.size() > 6) ? (float)_wtof(args[6].c_str()) : -1.0f;
         return App::arcReport(out, total, every, el, rot, shear, sustainedForcing) ? 0 : 1;
     }
 
     if (command == L"/probe" || command == L"-probe")
     {
-        const wchar_t* out = (tokens.size() > 1) ? tokens[1].c_str() : L"storm-probe.txt";
+        const wchar_t* out = (args.size() > 1) ? args[1].c_str() : L"storm-probe.txt";
         return WriteProbeReport(out) ? 0 : 1;
     }
 
+    // The mode is the first token that is not a modifier. Taking it from the
+    // raw line is what broke "/free /forced"; taking it from the tokens also
+    // means /p can be read out of its own token rather than out of a substring
+    // that a modifier might have shifted.
+    const std::wstring modeToken = args.empty() ? L"" : args[0];
     std::wstring flag;
-    if (!line.empty() && (line[0] == L'/' || line[0] == L'-'))
+    if (modeToken.length() >= 2 && (modeToken[0] == L'/' || modeToken[0] == L'-'))
     {
-        flag = line.substr(0, 2);
+        flag = modeToken.substr(0, 2);
         std::transform(flag.begin(), flag.end(), flag.begin(), ::towlower);
+    }
+
+    // Modifiers with no mode at all. Windows never does this, so it is someone
+    // at a prompt who wants to watch the thing: give them a window rather than
+    // taking over the display, and leave full screen one keystroke away as
+    // "/s /free". A completely bare command line still means Settings, because
+    // that is the form Windows uses when the user picks it.
+    if (flag.empty() && args.empty() && !tokens.empty())
+    {
+        App app;
+        if (!app.initialise(instance, Mode::Windowed, nullptr, freeRun, sustainedForcing))
+        { app.shutdown(); return 1; }
+        const int result = app.run();
+        app.shutdown();
+        return result;
     }
 
     if (flag == L"/s" || flag == L"-s")
@@ -335,7 +368,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR commandLine, int)
 
     if (flag == L"/p" || flag == L"-p")
     {
-        HWND preview = ParseWindowHandle(line.substr(2));
+        std::wstring tail = (modeToken.length() > 2) ? modeToken.substr(2) : L"";
+        if (tail.find_first_of(L"0123456789") == std::wstring::npos && args.size() > 1)
+            tail = args[1];
+        HWND preview = ParseWindowHandle(tail);
         if (!preview || !IsWindow(preview)) return 0;
 
         KillOtherInstances();
@@ -361,7 +397,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR commandLine, int)
     // /c, /c:HWND, or no arguments at all - Windows uses the bare form when the
     // user picks Settings.
     HWND parent = nullptr;
-    if (line.length() > 2 && line[2] == L':') parent = ParseWindowHandle(line.substr(2));
+    if (modeToken.length() > 2 && modeToken[2] == L':')
+        parent = ParseWindowHandle(modeToken.substr(2));
     ShowConfigDialog(instance, parent);
     return 0;
 }

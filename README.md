@@ -68,8 +68,15 @@ peak condensate and cloudy-cell count in each of 32 height bands. `/slice` draws
 fields themselves rather than the sky. Almost every wrong turn below was found
 in one of those two and would not have been visible in a screenshot.
 
-`/free` is a modifier rather than a mode, and goes after one: `Storm.scr /w /free`.
-It stops the storm cycling and, once the arc has run out, swaps the camera from
+`/free` and `/forced` are modifiers rather than modes. They can go anywhere on
+the command line, in any order, with or without a mode flag — `Storm.scr /free`,
+`Storm.scr /w /free`, `Storm.scr /free /forced /s` all work. Given no mode at
+all they open a window, on the grounds that anyone typing them is at a prompt
+wanting to watch something; `/s` alongside them gives full screen, and a
+completely bare command line still means Settings, because that is the form
+Windows uses when the user picks it.
+
+`/free` stops the storm cycling and, once the arc has run out, swaps the camera from
 the acts to a slow low orbit around the domain — the shot list's last keyframe
 is 21 km out aimed at 5 km, which is the worst place to watch from when what
 survives a storm is near the ground. Nothing is forced after the arc ends, so
