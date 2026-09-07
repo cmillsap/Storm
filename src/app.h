@@ -2,6 +2,7 @@
 #pragma once
 
 #include "renderer.h"
+#include "settings.h"
 #include <vector>
 
 enum class Mode
@@ -81,8 +82,17 @@ private:
     // A screensaver that pins a GPU overnight is antisocial in a way a game is
     // not, so frames are capped rather than left to run at the refresh rate.
     // Presenting every swap chain with SyncInterval 0 and pacing here also
-    // avoids serialising on several monitors' vblanks in turn.
+    // avoids serialising on several monitors' vblanks in turn. The cap is a
+    // setting now; this is what it defaults to.
     static const int kTargetFps = 30;
+
+    Settings m_settings;
+    // Moves the quality tier when the settings say Automatic. Hysteresis is
+    // the whole design: a tier that changes on a single slow frame oscillates,
+    // and an oscillating tier is more visible than a low one.
+    void adaptQuality(float frameMilliseconds);
+    float m_smoothedFrame = 0.0f;
+    float m_tierHold = 0.0f;
 
     // Signalled by a newly launched instance so a running preview releases its
     // swap chain before the new one tries to create another on the same HWND.

@@ -14,10 +14,12 @@ cbuffer Frame : register(b0)
     float3 gCamRight;      float gAspect;
     float3 gCamUp;         float gExposure;
 
-    // Previous frame's basis, for temporal reprojection.
+    // Previous frame's basis, for temporal reprojection - including where the
+    // camera was, which only matters once it translates.
     float3 gPrevForward;   float gPrevTanHalfFov;
     float3 gPrevRight;     float gHistoryValid;
     float3 gPrevUp;        float gHistoryBlend;
+    float3 gPrevCamPos;    float gPad2;
 
     float3 gSunDirection;  float gSunIntensity;
     float3 gCloudCentre;   float gCloudRadius;
@@ -65,6 +67,10 @@ RWTexture3D<float4> gDetailNoiseRW : register(u6);
 // against, and it is what tells the march where there is nothing to march
 // through. (u19 - the simulation owns u7..u18.)
 RWTexture3D<float>  gCloudMaxRW    : register(u19);
+// Transmittance-weighted mean distance to whatever each ray hit, at half
+// resolution. The march already computes it for aerial perspective; keeping it
+// is what lets the temporal resolve reproject a camera that translates.
+RWTexture2D<float>  gCloudDepth    : register(u20);
 
 Texture2D<float4>   gSharedSRV     : register(t0);
 Texture2D<float4>   gCloudCurrSRV  : register(t1);
@@ -74,6 +80,7 @@ Texture3D<float>    gLightVolume   : register(t4);
 Texture3D<float4>   gBaseNoise     : register(t5);
 Texture3D<float4>   gDetailNoise   : register(t6);
 Texture3D<float>    gCloudMax      : register(t15);
+Texture2D<float>    gCloudDepthSRV : register(t16);
 
 SamplerState gClamp : register(s0);
 SamplerState gWrap  : register(s1);
@@ -95,6 +102,14 @@ float hash12(float2 p)
     return frac((p3.x + p3.y) * p3.z);
 }
 
+// Three decorrelated values from a pixel and a frame index.
+float3 hash32(float2 p)
+{
+    float3 p3 = frac(float3(p.xyx) * float3(0.1031, 0.1030, 0.0973));
+    p3 += dot(p3, p3.yxz + 33.33);
+    return frac((p3.xxy + p3.yzz) * p3.zyx);
+}
+
 // Primary ray for a pixel centre, with the frame's sub-pixel jitter applied.
 float3 primaryRay(float2 pixel, float2 size, float2 jitter)
 {
@@ -105,10 +120,9 @@ float3 primaryRay(float2 pixel, float2 size, float2 jitter)
                    + gCamUp    * ndc.y * gTanHalfFov);
 }
 
-// Where a world-space direction sat on screen last frame. The camera rotates
-// but does not translate in Phase 00/01, which makes this exact and
-// independent of depth. Once the camera starts translating, this needs the
-// cloud's mean distance carried alongside the colour.
+// Where a world-space direction sat on screen last frame. Projective, so the
+// vector need not be normalised - which is what lets the same function serve
+// both the rotation-only case and the translating one.
 bool reprojectDirection(float3 dir, out float2 prevUv)
 {
     prevUv = float2(0.0, 0.0);
@@ -121,6 +135,19 @@ bool reprojectDirection(float3 dir, out float2 prevUv)
 
     prevUv = float2(x * 0.5 + 0.5, 0.5 - y * 0.5);
     return true;
+}
+
+// The same thing for a camera that has moved. Through Phases 00 to 04 the
+// camera only rotated, which made reprojection exact and independent of depth -
+// and a volumetric buffer has no single depth to reproject by anyway. Phase 05
+// moves the camera, so it needs one, and the march's transmittance-weighted
+// mean distance is the honest answer to "how far away is what this pixel is
+// looking at". A distance of zero means the ray hit nothing, and the direction
+// alone is then exact.
+bool reprojectPoint(float3 dir, float distance, out float2 prevUv)
+{
+    if (distance <= 0.0) return reprojectDirection(dir, prevUv);
+    return reprojectDirection(gCamPos + dir * distance - gPrevCamPos, prevUv);
 }
 
 float3 acesTonemap(float3 x)

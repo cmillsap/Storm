@@ -26,14 +26,15 @@ void CSResolve(uint3 tid : SV_DispatchThreadID)
 
     if (gHistoryValid > 0.5)
     {
-        // Reproject through the world direction rather than a screen-space
-        // motion vector. The camera rotates without translating, which makes
-        // this exact and independent of depth - a volumetric buffer has no
-        // single depth to reproject by in the first place.
+        // Reproject through the world point rather than a screen-space motion
+        // vector. Through Phase 04 the camera only rotated, which made this
+        // exact and independent of depth; Phase 05 flies it, so the march's
+        // transmittance-weighted mean distance comes along and the reprojection
+        // is a real one.
         float3 dir = primaryRay(float2(pixel), gHalfSize, float2(0.0, 0.0));
 
         float2 prevUv;
-        if (reprojectDirection(dir, prevUv))
+        if (reprojectPoint(dir, gCloudDepth[pixel], prevUv))
         {
             float4 history = readHistory(prevUv);
 

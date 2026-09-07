@@ -119,6 +119,12 @@ void CSCloud(uint3 tid : SV_DispatchThreadID)
         // the noise into detail.
         float jitter = hash12(float2(tid.xy) + float2(gFrameIndex * 0.7548, gFrameIndex * 0.5698));
 
+        // And a three-dimensional one for the light volume lookup, which is
+        // coarse enough that its interpolation bands are visible on grazing
+        // surfaces. See sampleLightVolume.
+        float3 lightDither = (hash32(float2(tid.xy) + (float)gFrameIndex * 1.6180) - 0.5)
+                           * lightVolumeCell();
+
         float  phase = cloudPhase(dot(rd, gSunDirection));
         float3 sunColour = sunTransmittanceAt(float3(gCloudCentre.x, gCloudBottom, gCloudCentre.z))
                          * gSunIntensity;
@@ -143,7 +149,7 @@ void CSCloud(uint3 tid : SV_DispatchThreadID)
                 float tau = d * stepLength * kExtinction;
                 float tr  = exp(-tau);
 
-                float light  = sampleLightVolume(p);
+                float light  = sampleLightVolume(p, lightDither);
                 // Powder darkens material a ray has only just entered. Taken
                 // literally it falls to zero with the optical depth, which was
                 // fine against Spike 02's analytic container but not against a
@@ -206,4 +212,8 @@ void CSCloud(uint3 tid : SV_DispatchThreadID)
     }
 
     gCloudCurrent[tid.xy] = float4(colour, transmittance);
+
+    // The depth the resolve reprojects by. Zero where the ray hit nothing,
+    // which the resolve reads as "infinitely far" and handles exactly.
+    gCloudDepth[tid.xy] = (weightSum > 0.0) ? weightedDistance / weightSum : 0.0;
 }

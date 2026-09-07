@@ -6,14 +6,15 @@ supercell, and drops a tornado out of it — with a different storm every run.
 Direct3D 12, compute-shader volumetric rendering. Screensaver shell modelled on
 [cmillsap/Juggler](https://github.com/cmillsap/Juggler).
 
-**Status: Phase 04 complete.** `Storm.scr` builds, installs and runs, and plays
-the whole storm: a flat-based cumulus becomes a congestus, the cap erodes, a
+**Status: version 1.0. All six phases are complete.** `Storm.scr` builds,
+installs and runs. A flat-based cumulus becomes a congestus, the cap erodes, a
 tilted cumulonimbus throws lightning and drops a rain shaft, a directed
 mesocyclone lets it carry supercell shear, and a tornado comes down out of the
-wall cloud. The four validation spikes that preceded it are kept under
-`spikes/`.
+wall cloud — filmed by a camera that pushes in for it, with a different storm
+every couple of minutes. The four validation spikes that preceded it are kept
+under `spikes/`.
 
-![Phase 04: a sheared supercell with its anvil, wall cloud and tornado](docs/phase04-supercell.png)
+![Four moments from one storm, through the camera that ships](docs/phase05-acts.png)
 
 ## Building and running
 
@@ -24,13 +25,21 @@ are copied out of the Windows SDK at build time.
 ```
 build.bat                       Release build (or: build.bat Debug)
 build\Release\Storm.scr /s      run full screen
-build\Release\Storm.scr /c      configuration dialog
+build\Release\Storm.scr /c      settings
+.\install.ps1                   install for the current user
+.\install.ps1 -Uninstall        and remove it again
 ```
 
-To install, copy `Storm.scr`, `dxcompiler.dll`, `dxil.dll` and the `shaders`
-folder together into a permanent location, then right-click `Storm.scr` and
-choose **Install**. They must stay together — the shaders are compiled at
-startup, not baked into the executable.
+`install.ps1` copies `Storm.scr`, `dxcompiler.dll`, `dxil.dll` and the
+`shaders` folder into `%LOCALAPPDATA%\Storm` and selects it as the screensaver.
+Nothing goes outside the user's profile and nothing needs elevation — an
+unsigned executable copying itself into System32 is the exact shape of
+something malicious, which was on the risk register from the start. The four
+pieces must stay together: the shaders are compiled at startup, not baked into
+the executable.
+
+**The binary is not signed**, so SmartScreen may warn the first time it runs.
+Signing needs a code-signing certificate that this project does not have.
 
 ### Development switches
 
@@ -503,6 +512,137 @@ rain being wrapped into a hook — and the anvil is still limited by the domain
 width in the way Phase 03 described.
 
 
+## Phase 05 — direction and ship
+
+The camera flies, the storm is different every time, and the whole thing
+installs. This is the phase where the parts stop being a demo of a solver and
+start being a screensaver.
+
+![Phase 05: four moments from one storm, through the camera that ships](docs/phase05-acts.png)
+
+- **A camera spline over the acts.** Shots are cylindrical — a distance from
+  the storm's axis, an azimuth around it, a height, and a height on the axis to
+  look at — interpolated with Catmull-Rom. It opens far off and low, closes as
+  the congestus builds, backs away to hold the anvil, then swings round to the
+  inflow side and pushes in as the funnel comes down.
+- **Reprojection that survives a translating camera**, which the plan flagged
+  as owed back in Phase 01 and which the camera above made unavoidable.
+- **A different storm every couple of minutes**, derived from a seed by
+  perturbing the sounding vector — the only route Spike 03 left open.
+- **Settings in the registry**, behind a real dialog on `/c`: quality, frame
+  rate, whether to cycle storms, when to stop drawing, and whether to back off
+  on battery.
+- **Adaptive quality** on a smoothed frame time with hysteresis, and a cheap
+  path for the `/p` preview thumbnail.
+- **A per-user installer** that does not go anywhere near System32.
+
+**10.9 ms per frame at 3440×1440 in the wide shots, rising to 16.6 ms with the
+camera in close on the tornado** — 33% to 50% of a 30 fps frame on an RTX
+5060 Ti. The close shots cost more for the obvious reason: the camera is inside
+the storm's own scale, and every ray crosses far more cloud.
+
+| act | camera | frame |
+|---|---|---|
+| the cumulus appears | 19 km | 10.9 ms |
+| congestus | 15 km | 11.5 ms |
+| the anvil spreads | 17 km | 13.0 ms |
+| the tornado is down | 4 km | 16.6 ms |
+
+### The camera's bill, paid at last
+
+Phase 01 wrote a note against the temporal resolve: *once the camera starts
+translating, reprojection needs the cloud's mean distance carried alongside the
+colour.* For four phases the camera only rotated, which makes reprojection
+exact and independent of depth. Phase 05 flies it, so the bill came due.
+
+The march already computed what was needed — the transmittance-weighted mean
+distance along each ray, used for aerial perspective — and had been throwing it
+away. Keeping it in a half-resolution R32F buffer and reprojecting through the
+world point rather than the world direction is the whole change. R32F rather
+than R16F because this is a distance in metres out to twenty-odd kilometres,
+and half-float steps to 16 m at that range, which shows as banded reprojection
+exactly when the camera is moving fastest.
+
+### What the new camera angles exposed
+
+Flying the camera did not break the renderer, but it did find something four
+phases of a fixed viewpoint never could. The first shot that looked along the
+anvil rather than at it came back with the cloud's upper surface **combed with
+fine regular striations**, about nine pixels apart.
+
+Nine pixels at that range is 157 m, which is exactly one cell of the light
+volume. The transmittance volume is coarse and its trilinear interpolation is
+smooth but piecewise; on a surface facing the camera that is invisible, and on
+one nearly tangent to the view it is not, because a small step across the
+screen crosses many cells. The fixed camera had simply never looked at the
+storm from an angle that produced a tangent surface.
+
+Raising the volume to 192³ removes it and costs 3.4× the light volume to build.
+Dithering the lookup by up to one cell, per pixel and per frame, removes it just
+as well and costs one hash: what was a static band becomes noise, and the
+temporal resolve was already there to average noise away. The dithered 128³ is
+what ships, and it reads as cloud texture rather than as a fix.
+
+### Variety, and where it comes from
+
+Spike 03 measured cloud top varying by 0.4% across four noise seeds — every
+seed makes the same storm — while the sounding controls it monotonically. So
+the seed moves the atmosphere and never the noise:
+
+| what the seed moves | range |
+|---|---|
+| surface humidity | ±0.03 — the cloud base, ±150 m |
+| tropospheric lapse rate | ±0.16 K/km — how deep it gets |
+| equilibrium level | ±700 m — where the anvil sits |
+| shear, and rotation with it | 3.3–4.7 m/s/km, 19–28 m/s |
+| forcing radius | ±220 m — how much of the frame it fills |
+| tornado onset, hold, descent | 300–620 s on the ground |
+
+Shear and rotation move together deliberately: Phase 04 measured that shear
+without rotation tears the storm apart, so a seed that asks for a more sheared
+storm has to ask for a stronger mesocyclone in the same breath.
+
+### Two bugs worth remembering
+
+- **`DLGITEMTEMPLATEEX` does not begin the way `DLGITEMTEMPLATE` does.** The
+  extended form starts with a help id, then extended style, then style; the
+  plain one starts with style. Writing the plain layout into an extended
+  template produces something Windows rejects outright — `DialogBoxIndirectParam`
+  returns −1 and `GetLastError` returns 0, which is a singularly unhelpful way
+  to be told that a 300-byte buffer has one field in the wrong place.
+- **The `.scr` shell association caught me in my own harness.** The README has
+  warned since Phase 00 that launching a `.scr` from a script needs
+  `UseShellExecute = false`, because the default verb is *Install*. Testing the
+  settings dialog I omitted `-NoNewWindow`, PowerShell used ShellExecute, the
+  shell ran the screensaver full-screen instead, and I spent a while concluding
+  the dialog template was malformed from a window that was not the dialog. The
+  template *was* malformed, which is the part that made it convincing.
+
+### Shipping
+
+`install.ps1` installs per-user into `%LOCALAPPDATA%\Storm` and points the
+registry at it. Nothing is written outside the user's profile and no elevation
+is asked for, which is deliberate: an unsigned executable copying itself into
+System32 is the exact shape of something malicious, and that was on the risk
+register from the start. `-Uninstall` reverses it, and leaves the settings
+alone so that reinstalling does not forget them.
+
+**The binary is not signed.** Signing needs a code-signing certificate, which
+this project does not have, so SmartScreen will warn the first time it runs.
+That is the one item on the plan's Phase 05 list that is not done, and it is
+not done for want of a certificate rather than for want of the work.
+
+Known limits: **the sky is empty for about the first fifteen seconds of each
+storm**, because the solver has to grow a cumulus from rest and there is no way
+to start it partway. With storms cycling every two and a half minutes that is
+about a tenth of the time, at the moment nobody is watching. The **multi-monitor
+path has still only ever run on one physical display** — the handshake, the
+per-monitor swap chains and the crop-to-fill arithmetic are all built and
+`/probe` reports what they would do, but they are verified on paper. And the
+adaptive quality has only been exercised by forcing tiers by hand; the machine
+it was written on never drops below the top one.
+
+
 ## Spikes
 
 Four spikes were run before committing to the build, each retiring a specific
@@ -606,6 +746,8 @@ src/                     the screensaver itself
   app.h/.cpp             monitor enumeration, windows, input, frame loop
   view.h/.cpp            one output: window, swap chain, crop-to-fill
   renderer.h/.cpp        shared render target and the passes over it
+  director.h/.cpp        the camera spline and the acts it films
+  settings.h/.cpp        registry-backed settings and the /c dialog
   simulation.h/.cpp      the fluid solver: resources, stepping, the sounding
   slots.h                descriptor table layout, shared by renderer and simulation
   gpu.h/.cpp             D3D12 device, descriptor heaps, runtime shader compilation

@@ -1,7 +1,7 @@
 // Storm - descriptor table layout.
 //
 // One fixed table for the whole renderer, so the shaders can name registers
-// directly: the UAV range maps onto u0..u19 and the SRV range onto t0..t15, in
+// directly: the UAV range maps onto u0..u20 and the SRV range onto t0..t16, in
 // this order. Shared by the renderer and the simulation, which is why it lives
 // on its own rather than in either.
 #pragma once
@@ -29,6 +29,7 @@ enum Slot
     kUavSimDiv,         // u17
     kUavSimStats,       // u18 - diagnostics, written only by the /arc harness
     kUavCloudMax,       // u19 - coarse peak condensate, one cell per 4x4x4 of the sim
+    kUavCloudDepth,     // u20 - mean distance to what each ray hit
     kUavCount,
 
     // SRVs, t0 upward.
@@ -48,6 +49,7 @@ enum Slot
     kSrvSimS0,
     kSrvSimS1,          // t14
     kSrvCloudMax,       // t15
+    kSrvCloudDepth,     // t16
     kSlotCount
 };
 

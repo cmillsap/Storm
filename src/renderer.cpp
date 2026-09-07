@@ -1,4 +1,5 @@
-#include "renderer.h"
+﻿#include "renderer.h"
+#include "settings.h"
 
 #include <algorithm>
 #include <cmath>
@@ -276,6 +277,8 @@ bool Renderer::initialise(Gpu& g)
     STORM_CHECK(constantBuffer->Map(0, &noRead, (void**)&constantsMapped), "map frame constants");
 
     if (!simulation.create(*gpu, rootSignature.Get())) return false;
+    DeriveStorm(simulation.seed, simulation.sounding, simulation.arc);
+    director.create(simulation);
 
     // Sized off the simulation, so it has to come after it. One cell per
     // 4x4x4 block; the domain divides exactly, and CSCloudMax derives the same
@@ -302,6 +305,7 @@ void Renderer::shutdown()
     cloudHistory[1].Reset();
     lightVolume.Reset();
     cloudMax.Reset();
+    cloudDepth.Reset();
     baseNoise.Reset();
     detailNoise.Reset();
     constantBuffer.Reset();
@@ -390,6 +394,14 @@ bool Renderer::createCloudBuffers(UINT fullWidth, UINT fullHeight)
         MakeSrv(*gpu, cloudHistory[i].Get(), DXGI_FORMAT_R16G16B16A16_FLOAT, kSrvCloudHistory0 + i, false);
     }
 
+    // R32F rather than R16F: this is a distance in metres out to twenty-odd
+    // kilometres, and half-float steps to 16 m at that range - visible as
+    // banded reprojection when the camera is moving.
+    cloudDepth = CreateTexture(*gpu, D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+                               DXGI_FORMAT_R32_FLOAT, halfWidth, halfHeight, 1, "cloud depth");
+    MakeUav(*gpu, cloudDepth.Get(), DXGI_FORMAT_R32_FLOAT, kUavCloudDepth);
+    MakeSrv(*gpu, cloudDepth.Get(), DXGI_FORMAT_R32_FLOAT, kSrvCloudDepth, false);
+
     historyValid = false;
     return true;
 }
@@ -417,10 +429,12 @@ void Renderer::fillConstants(FrameConstants& c, const RenderTarget& target, floa
 
     for (int i = 0; i < 3; ++i)
     {
+        c.prevCamPos[i]  = m_prevCamPos[i];
         c.prevForward[i] = m_prevForward[i];
         c.prevRight[i]   = m_prevRight[i];
         c.prevUp[i]      = m_prevUp[i];
     }
+    c.pad2 = 0.0f;
     c.prevTanHalfFov = m_prevTanHalfFov;
     c.historyValid = historyValid ? 1.0f : 0.0f;
     // How much of the accumulated history survives each frame. High enough to
@@ -553,7 +567,8 @@ void Renderer::fillConstants(FrameConstants& c, const RenderTarget& target, floa
         c.pad1[0] = c.pad1[1] = 0.0f;
     }
 
-    c.numSteps = 256;
+    // Also the knob the adaptive tier turns when a machine cannot keep up.
+    c.numSteps = Settings::marchSteps(qualityTier);
     c.frameIndex = frameIndex;
     c.historyIndex = historyIndex;
     c.lightVolumeRes = (int32_t)kLightVolumeRes;
@@ -592,6 +607,17 @@ void Renderer::generateNoise()
 
 void Renderer::renderTargets(float timeSeconds, float deltaSeconds)
 {
+    // One storm is about two and a half minutes; the screensaver runs all
+    // night. When this one is over, a new seed makes a different atmosphere and
+    // the director re-cuts its shots against the new arc.
+    if (directorEnabled && cycleStorms && simulation.finished())
+    {
+        simulation.restart(simulation.seed + 1);
+        director.create(simulation);
+        historyValid = false;         // nothing on screen survives the cut
+        lightVolumeReady = false;
+    }
+
     // The simulation owns the density the cloud pass reads, so it runs first.
     // It steps at its own rate and reports whether the volume actually changed.
     const bool simulationStepped = simulation.advance(deltaSeconds);
@@ -599,10 +625,13 @@ void Renderer::renderTargets(float timeSeconds, float deltaSeconds)
 
     for (RenderTarget& target : targets)
     {
-        // A slow oscillation rather than a continuous sweep, so the cloud stays
-        // framed. Combined with the sun's own cycle this gives the idle scene
-        // two independent rhythms, and it is what exercises the reprojection.
-        target.camera.yaw = target.camera.baseYaw + 0.09f * std::sin(timeSeconds * 0.021f);
+        // The camera. Through Phase 04 this was one fixed viewpoint with a
+        // slow yaw oscillation on it; Phase 05 hands it to the director, which
+        // flies the acts.
+        if (directorEnabled)
+            target.camera = director.frame(simulation.simulatedTime, timeSeconds, simulation);
+        else
+            target.camera.yaw = target.camera.baseYaw + 0.09f * std::sin(timeSeconds * 0.021f);
 
         FrameConstants constants = {};
         fillConstants(constants, target, timeSeconds);
@@ -623,7 +652,13 @@ void Renderer::renderTargets(float timeSeconds, float deltaSeconds)
         //    simulation rate, not frame rate. The order matters - every
         //    density sample the light volume takes reads the coarse peak as
         //    its reference, so the peak has to be current first.
-        if (simulationStepped || !lightVolumeReady)
+        // At the lowest tier the light volume rebuilds on every other step
+        // rather than every one. It is the only pass whose cost can be halved
+        // without changing what the march does, and lighting changes slowly.
+        const bool rebuildLight = !lightVolumeReady
+            || (simulationStepped && (Settings::lightVolumeEveryStep(qualityTier)
+                                      || (frameIndex & 1) == 0));
+        if (rebuildLight)
         {
             if (lightVolumeReady)
             {
@@ -661,10 +696,12 @@ void Renderer::renderTargets(float timeSeconds, float deltaSeconds)
         gpu->cmd->SetPipelineState(psoCloud.Get());
         gpu->cmd->Dispatch((halfWidth + 7) / 8, (halfHeight + 7) / 8, 1);
 
-        D3D12_RESOURCE_BARRIER cloudWritten = {};
-        cloudWritten.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-        cloudWritten.UAV.pResource = cloudCurrent.Get();
-        gpu->cmd->ResourceBarrier(1, &cloudWritten);
+        D3D12_RESOURCE_BARRIER cloudWritten[2] = {};
+        cloudWritten[0].Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+        cloudWritten[0].UAV.pResource = cloudCurrent.Get();
+        cloudWritten[1].Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+        cloudWritten[1].UAV.pResource = cloudDepth.Get();
+        gpu->cmd->ResourceBarrier(2, cloudWritten);
 
         // 3. Reproject and accumulate. Reads last frame's history as an SRV.
         auto prevToRead = Gpu::transition(cloudHistory[historyIndex ^ 1].Get(),
@@ -700,6 +737,7 @@ void Renderer::renderTargets(float timeSeconds, float deltaSeconds)
 
         for (int i = 0; i < 3; ++i)
         {
+            m_prevCamPos[i]  = constants.camPos[i];
             m_prevForward[i] = constants.camForward[i];
             m_prevRight[i]   = constants.camRight[i];
             m_prevUp[i]      = constants.camUp[i];

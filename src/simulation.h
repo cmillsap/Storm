@@ -363,6 +363,16 @@ struct SimStats
     bool hasCloud() const { return cloudyCells > 0.0f; }
 };
 
+// Derives a storm from a seed by perturbing the sounding, which is the only
+// way Spike 03 left open: it measured cloud top varying by 0.4% across four
+// noise seeds - every seed makes the same storm - while the sounding controls
+// it monotonically. So the seed moves the atmosphere, not the noise.
+//
+// The ranges are deliberately modest. Each one on its own is a storm that is
+// recognisably the same kind of thing; together they are a sky that does not
+// repeat, which is what a screensaver needs.
+void DeriveStorm(uint32_t seed, Sounding& sounding, StormArc& arc);
+
 struct Simulation
 {
     Gpu* gpu = nullptr;
@@ -370,6 +380,7 @@ struct Simulation
     // The whole storm, as data. Everything below this point is machinery.
     Sounding sounding;
     StormArc arc;
+    uint32_t seed = 1;
 
     // 224 x 160 x 160 at 90 m: 20.16 km along the shear, 14.40 km deep, 14.40
     // km across. Phase 02's 6.4 km cube was outgrown before the forcing had
@@ -444,6 +455,12 @@ struct Simulation
     bool advance(float elapsedSeconds);
 
     void reset();                                     // re-seed the domain
+
+    // Ends this storm and starts a different one. The screensaver runs all
+    // night; one storm is two and a half minutes.
+    void restart(uint32_t nextSeed);
+    // True once the storm is over and the sky is empty enough to cut away.
+    bool finished() const;
 
     // The constants the render passes should read: the state after the last
     // step this frame. The steps themselves each read their own slot.

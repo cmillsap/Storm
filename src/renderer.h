@@ -11,6 +11,7 @@
 #include "view.h"
 #include "slots.h"
 #include "simulation.h"
+#include "director.h"
 #include <vector>
 
 // Mirrors the cbuffer in common.hlsli. HLSL packs float3 + float into one
@@ -25,6 +26,7 @@ struct alignas(16) FrameConstants
     float prevForward[3];   float prevTanHalfFov;
     float prevRight[3];     float historyValid;
     float prevUp[3];        float historyBlend;
+    float prevCamPos[3];    float pad2;
 
     float sunDirection[3];  float sunIntensity;
     float cloudCentre[3];   float cloudRadius;
@@ -72,6 +74,10 @@ struct Renderer
 
     ComPtr<ID3D12Resource> cloudCurrent;
     ComPtr<ID3D12Resource> cloudHistory[2];
+    // Mean distance per half-resolution pixel, written by the march and read by
+    // the resolve. Not ping-ponged: reprojection needs this frame's depth, not
+    // an accumulated one.
+    ComPtr<ID3D12Resource> cloudDepth;
     ComPtr<ID3D12Resource> lightVolume;
     // Peak condensate over each 4x4x4 block of simulation cells. Rebuilt at
     // simulation rate, and read by every density sample as the local reference
@@ -83,6 +89,19 @@ struct Renderer
     uint8_t* constantsMapped = nullptr;
 
     Simulation simulation;
+
+    // The camera. Disabled by the development capture switches, which aim it
+    // themselves; on in everything Windows launches.
+    Director director;
+    bool directorEnabled = true;
+
+    // Quality tier: 0 high, 1 medium, 2 low. App::run measures the frame and
+    // moves this when the settings say Automatic.
+    int  qualityTier = 0;
+    bool cycleStorms = true;
+    // Set when the saver has been up long enough that the user has plainly
+    // gone home. The last frame stays on screen; nothing is stepped or marched.
+    bool idle = false;
 
     UINT halfWidth = 0, halfHeight = 0;
     int  frameIndex = 0;
@@ -110,7 +129,8 @@ private:
     bool createCloudBuffers(UINT fullWidth, UINT fullHeight);
     void fillConstants(FrameConstants& c, const RenderTarget& target, float timeSeconds);
 
-    // Previous frame's basis, kept so the resolve can reproject.
+    // Previous frame's basis and position, kept so the resolve can reproject.
+    float m_prevCamPos[3]  = { 0, 0, 0 };
     float m_prevForward[3] = { 0, 0, 1 };
     float m_prevRight[3]   = { 1, 0, 0 };
     float m_prevUp[3]      = { 0, 1, 0 };

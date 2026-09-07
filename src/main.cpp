@@ -5,6 +5,7 @@
 // /p can arrive with the handle attached by a colon.
 
 #include "app.h"
+#include "settings.h"
 
 #include <tlhelp32.h>
 #include <algorithm>
@@ -181,16 +182,10 @@ static bool WriteProbeReport(const wchar_t* path)
     return true;
 }
 
-static void ShowConfigDialog(HWND parent)
+static void ShowConfigDialog(HINSTANCE instance, HWND parent)
 {
-    MessageBoxW(parent,
-        L"Storm " STORM_VERSION_TEXT L"\n"
-        L"A volumetric supercell, as a screensaver.\n\n"
-        L"Phase 00: shell and skeleton. The sky is a real Rayleigh/Mie "
-        L"atmosphere with a sun on a five-minute arc; clouds, the storm and "
-        L"the tornado arrive in later phases.\n\n"
-        L"Settings will live here once there is something worth setting.",
-        L"Storm", MB_OK | MB_ICONINFORMATION);
+    Settings settings = Settings::load();
+    ShowSettingsDialog(instance, parent, settings);
 }
 
 // Accepts "/p 1234", "/p:1234" and "-p1234" alike, since the exact spelling
@@ -326,6 +321,6 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR commandLine, int)
     // user picks Settings.
     HWND parent = nullptr;
     if (line.length() > 2 && line[2] == L':') parent = ParseWindowHandle(line.substr(2));
-    ShowConfigDialog(parent);
+    ShowConfigDialog(instance, parent);
     return 0;
 }

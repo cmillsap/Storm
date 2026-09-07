@@ -367,10 +367,32 @@ float sampleDensity(float3 p, bool detail)
 
 // ---- lighting -------------------------------------------------------------
 
+// Size of one light-volume cell in world metres, per axis.
+float3 lightVolumeCell()
+{
+    return (cloudBoxMax() - cloudBoxMin()) / (float)gLightVolumeRes;
+}
+
+// The transmittance volume is coarse - 157 m a cell across this domain - and
+// trilinear interpolation of it is smooth but piecewise. On a surface facing
+// the camera that is invisible; on one nearly tangent to the view it is not,
+// because a small step across the screen crosses many cells. Phase 05 flew the
+// camera round to exactly those angles and the anvil's upper surface came out
+// combed with regular striations one cell apart.
+//
+// The dither is per pixel and per frame, so what was a static band becomes
+// noise the temporal resolve averages away. It is a great deal cheaper than
+// the alternative: 192 cubed removes the banding too, and costs 3.4 times the
+// light volume to build.
+float sampleLightVolume(float3 p, float3 dither)
+{
+    float3 uvw = (p + dither - cloudBoxMin()) / (cloudBoxMax() - cloudBoxMin());
+    return gLightVolume.SampleLevel(gClamp, uvw, 0);
+}
+
 float sampleLightVolume(float3 p)
 {
-    float3 uvw = (p - cloudBoxMin()) / (cloudBoxMax() - cloudBoxMin());
-    return gLightVolume.SampleLevel(gClamp, uvw, 0);
+    return sampleLightVolume(p, float3(0.0, 0.0, 0.0));
 }
 
 float henyeyGreenstein(float c, float g)

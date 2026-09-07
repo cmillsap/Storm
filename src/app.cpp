@@ -223,13 +223,67 @@ bool App::initialise(HINSTANCE instance, Mode mode, HWND previewWindow)
 
 // ---------------------------------------------------------------- frame loop
 
+// The tier is moved on a smoothed frame time, and only after it has been
+// wrong for a while. The thresholds are asymmetric on purpose: drop quickly
+// when the machine is struggling, restore slowly, because the alternative is a
+// picture that visibly breathes.
+void App::adaptQuality(float frameMilliseconds)
+{
+    if (m_settings.quality != Settings::QualityAuto) return;
+
+    m_smoothedFrame = (m_smoothedFrame <= 0.0f)
+                    ? frameMilliseconds
+                    : m_smoothedFrame * 0.94f + frameMilliseconds * 0.06f;
+
+    const float budget = 1000.0f / (float)m_settings.frameCap;
+    m_tierHold += frameMilliseconds * 0.001f;
+    if (m_tierHold < 2.0f) return;
+
+    const int was = m_renderer.qualityTier;
+    if (m_smoothedFrame > budget * 0.85f && m_renderer.qualityTier < 2)
+        ++m_renderer.qualityTier;
+    else if (m_smoothedFrame < budget * 0.45f && m_renderer.qualityTier > 0)
+        --m_renderer.qualityTier;
+
+    if (m_renderer.qualityTier != was) { m_tierHold = 0.0f; m_smoothedFrame = budget * 0.6f; }
+}
+
 int App::run()
 {
+    m_settings = Settings::load();
+    m_renderer.cycleStorms = m_settings.cycleStorms;
+
+    // On battery, whatever the settings say: half the frame rate and never the
+    // top tier. This is the "power and thermals" risk the plan has carried
+    // open since the beginning, and it is the cheap half of the answer.
+    int frameCap = m_settings.frameCap;
+    SYSTEM_POWER_STATUS power = {};
+    const bool onBattery = m_settings.respectBattery
+                        && GetSystemPowerStatus(&power)
+                        && power.ACLineStatus == 0;
+    if (onBattery) frameCap = std::max(15, frameCap / 2);
+
+    m_renderer.qualityTier = (m_settings.quality == Settings::QualityAuto)
+                           ? (onBattery ? 1 : 0)
+                           : m_settings.quality - 1;
+    if (onBattery) m_renderer.qualityTier = std::max(m_renderer.qualityTier, 1);
+
+    // The preview is a thumbnail in the Screen Saver dialog - a couple of
+    // hundred pixels across, behind a modal window the user is about to close.
+    // It gets the cheap path and a slow frame rate, and never adapts: the
+    // adaptation would be measuring a window nobody is looking at.
+    if (m_mode == Mode::Preview)
+    {
+        m_renderer.qualityTier = 2;
+        m_settings.quality = Settings::QualityLow;
+        frameCap = 15;
+    }
+
     LARGE_INTEGER frequency, start;
     QueryPerformanceFrequency(&frequency);
     QueryPerformanceCounter(&start);
 
-    const double frameSeconds = 1.0 / (double)kTargetFps;
+    const double frameSeconds = 1.0 / (double)frameCap;
     LARGE_INTEGER nextFrame = start;
     float lastFrameTime = 0.0f;
 
@@ -259,11 +313,30 @@ int App::run()
         const float delta = elapsed - lastFrameTime;
         lastFrameTime = elapsed;
 
+        // Stop drawing once the user has plainly gone home. The last frame
+        // stays on screen - the swap chain keeps it - and the GPU goes quiet,
+        // which is the other half of the power answer and the only part of it
+        // that helps at four in the morning.
+        const bool goneHome = m_settings.idleMinutes > 0
+                           && elapsed > (float)m_settings.idleMinutes * 60.0f;
+        if (goneHome)
+        {
+            Sleep(250);
+            continue;
+        }
+
+        LARGE_INTEGER frameStart;
+        QueryPerformanceCounter(&frameStart);
+
         m_gpu.beginFrame();
         m_renderer.renderTargets(elapsed, delta);
         for (View& v : m_views) m_renderer.presentView(v);
         m_renderer.finishFrame();
         m_gpu.submitAndWait();
+
+        QueryPerformanceCounter(&now);
+        adaptQuality((float)((double)(now.QuadPart - frameStart.QuadPart) * 1000.0
+                             / (double)frequency.QuadPart));
 
         for (View& v : m_views)
             if (v.swapChain) v.swapChain->Present(0, 0);
@@ -303,6 +376,7 @@ bool App::captureFrame(UINT width, UINT height, float atTime, const wchar_t* pat
 
     if (distance > 0.0f)
     {
+        renderer.directorEnabled = false;
         // Stand off the tornado on the inflow side - upstream of the storm,
         // which is the quadrant a supercell keeps free of rain - and aim at it.
         Simulation& sim = renderer.simulation;
@@ -332,7 +406,9 @@ bool App::captureFrame(UINT width, UINT height, float atTime, const wchar_t* pat
     // and holding time still would leave the temporal reprojection an identity
     // transform, so a capture would prove nothing about it either.
     const float step = 1.0f / 30.0f;
-    const int frames = std::max(30, std::min(4000, (int)(atTime / step)));
+    // Generous, because a storm is about 145 seconds and the interesting
+    // question is often what the second or third one looks like.
+    const int frames = std::max(30, std::min(24000, (int)(atTime / step)));
     for (int i = 0; i < frames; ++i)
     {
         gpu.beginFrame();

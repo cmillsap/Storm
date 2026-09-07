@@ -486,6 +486,70 @@ void Simulation::setSetState(int index, D3D12_RESOURCE_STATES from, D3D12_RESOUR
     m_setState[index] = to;
 }
 
+// A cheap, well-mixed integer hash, used to pull independent unit values out of
+// one seed. Deterministic across runs and machines, which the plan asks for:
+// the same seed has to give the same storm.
+static float SeedValue(uint32_t seed, uint32_t index)
+{
+    uint32_t h = seed * 747796405u + index * 2891336453u;
+    h = ((h >> ((h >> 28) + 4)) ^ h) * 277803737u;
+    h = (h >> 22) ^ h;
+    return (float)(h & 0xFFFFFFu) / (float)0xFFFFFF;
+}
+
+// Symmetric about zero, so a perturbation is as likely either way.
+static float SeedSpread(uint32_t seed, uint32_t index, float amount)
+{
+    return (SeedValue(seed, index) * 2.0f - 1.0f) * amount;
+}
+
+void DeriveStorm(uint32_t seed, Sounding& sounding, StormArc& arc)
+{
+    sounding = Sounding();
+    arc = StormArc();
+
+    // The cloud base. Tight, because it is the most visible single number in
+    // the frame and the mixed layer has to stay under it.
+    sounding.surfaceRH   += SeedSpread(seed, 1, 0.030f);
+    // How deep the storm gets, through two independent routes: where its own
+    // neutral level lands, and where the cap is. Phase 03's calibration curve
+    // is what says these are the levers.
+    sounding.lapseTropo  += SeedSpread(seed, 2, 0.00016f);
+    sounding.equilibrium += SeedSpread(seed, 3, 700.0f);
+    // How hard it leans, and how hard it spins. Kept in step with each other -
+    // Phase 04 measured that shear without rotation tears the storm apart, so
+    // a seed that asks for more of one asks for more of the other.
+    const float vigour = SeedValue(seed, 4);
+    sounding.shear[0]     = 3.3f + vigour * 1.4f;
+    sounding.rotationSpeed = 19.0f + vigour * 9.0f;
+    // And how wide the tower is, which sets how much of the frame it fills.
+    sounding.forceRadius += SeedSpread(seed, 5, 220.0f);
+    sounding.capStrength += SeedSpread(seed, 6, 0.9f);
+    // Where it stands, so it is not always dead centre.
+    sounding.forceOffset[1] += SeedSpread(seed, 7, 1400.0f);
+
+    // And the tornado's own timing. Some storms hold one for a long time and
+    // some barely manage it; the difference is most of what makes two runs
+    // feel like different weather rather than the same clip.
+    arc.tornadoOnset  += SeedSpread(seed, 8, 0.10f);
+    arc.tornadoHold    = 300.0f + SeedValue(seed, 9) * 320.0f;
+    arc.tornadoDescend = 180.0f + SeedValue(seed, 10) * 110.0f;
+}
+
+void Simulation::restart(uint32_t nextSeed)
+{
+    seed = nextSeed;
+    DeriveStorm(seed, sounding, arc);
+    reset();
+}
+
+bool Simulation::finished() const
+{
+    // A little past the arc, so the sky is empty rather than merely fading
+    // when the cut happens.
+    return simulatedTime > arc.duration() + 320.0f;
+}
+
 void Simulation::reset()
 {
     simulatedTime = 0.0f;
