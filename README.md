@@ -805,6 +805,7 @@ shaders/
   blit.hlsl              presentation blit with the crop rectangle
 docs/
   METEOROLOGY.md         the physics behind the storm, and where it is stagecraft
+  storm-structure.svg    its cross-section diagram
   phase*.png             the images above
 
 spikes/01-perf/          what a raymarch step costs

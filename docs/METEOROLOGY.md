@@ -393,6 +393,18 @@ up the classic storm-chaser photograph:
 **None of these are simulated.** All five are authored geometry, evaluated
 analytically inside the renderer. Part 3 explains why, and what that means.
 
+### All of it, in one picture
+
+![A vertical slice through the mature storm along the shear: the mixed layer and cloud base, the freezing and glaciation levels, the equilibrium level with the anvil spreading beneath the stratosphere and an overshooting top above it, the tilted tower and its mesocyclone, the rain shaft and rain-cooled downdraft, and the wall cloud, funnel and debris cloud at the base](storm-structure.svg)
+
+Everything above, on the shipped sounding, at the moment the tornado is on the
+ground. The heights are the real ones and so are the widths — which is worth
+dwelling on twice. The anvil reaches the edge of the domain, because it is a
+20 km box and a real anvil streams a hundred kilometres downwind. And the funnel
+is the sliver under the wall cloud: a kilometre tall and four grid cells across,
+which is the entire reason Part 3 has a section titled *the tornado and its
+entourage are drawn, not simulated*.
+
 ---
 
 ## Part 2 — the variables, and what each one does
