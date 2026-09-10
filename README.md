@@ -16,6 +16,12 @@ under `spikes/`.
 
 ![Four moments from one storm, through the camera that ships](docs/phase05-acts.png)
 
+**[The meteorology of Storm](docs/METEOROLOGY.md)** explains what the simulation
+is actually modelling — the sounding, buoyancy, the cap, ice and the anvil, the
+mesocyclone — in terms that assume no meteorology, along with what each variable
+in the `Sounding` vector controls and an honest account of where the model stops
+being physics and starts being stagecraft.
+
 ## Building and running
 
 Requires Visual Studio 2022 with the C++ desktop workload and the Windows
@@ -797,6 +803,9 @@ shaders/
   composite.hlsl         full-resolution sky, ground and cloud composite
   slice.hlsl             the fields on a vertical plane, for /slice
   blit.hlsl              presentation blit with the crop rectangle
+docs/
+  METEOROLOGY.md         the physics behind the storm, and where it is stagecraft
+  phase*.png             the images above
 
 spikes/01-perf/          what a raymarch step costs
   src/main.cpp           D3D12 host, benchmark driver, BMP capture
