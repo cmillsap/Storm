@@ -707,6 +707,15 @@ azimuth, curving with radius the way a rear-flank downdraft wraps. The
 `clearSlot` comment states the position exactly: *the storm makes the rain;
 this decides where it is not.*
 
+![Looking down on the storm: the precipitation falling downstream of the updraft, with a rain-free vault under the mesocyclone and a curving wedge cut back through the rain toward the camera's left, the cyclonically rotating mesocyclone, and the tornado with its wall cloud and debris cloud in the middle of the clearing](storm-plan-view.svg)
+
+The cross-section in Part 1 cannot show any of this, for a structural reason: a
+vault and a slot are *azimuthal*, and a single vertical slice has no azimuth to
+vary. Seen from above, the keyhole is the whole trick — a rain-free disc under
+the mesocyclone, opening out through the precipitation in the one direction the
+camera happens to be looking past. Nothing in the solver put it there, and it
+does not move when the storm does.
+
 Two things make this more defensible than it might sound. First, it is not
 composited over the finished image — it goes into `sampleDensity` alongside the
 simulated condensate, which means the light volume sees it, so the funnel is

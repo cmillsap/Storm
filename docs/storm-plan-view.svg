@@ -1,0 +1,127 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 600" width="1000" height="600" role="img" aria-labelledby="t d">
+<title id="t">The storm from above</title>
+<desc id="d">A plan view of the mature storm looking down from above, showing the features a cross-section cannot: the precipitation falling downstream of the updraft, the rain-free vault under the mesocyclone, the rear-flank clear slot cut back into the rain toward the camera's left, the cyclonically rotating mesocyclone, and the tornado with its wall cloud and debris cloud.</desc>
+
+<defs>
+  <linearGradient id="sky2" gradientUnits="userSpaceOnUse" x1="0" y1="72" x2="0" y2="500">
+    <stop offset="0" stop-color="#101822"/>
+    <stop offset="1" stop-color="#16202c"/>
+  </linearGradient>
+
+  <!-- the region the clearSlot function empties: a curving wedge plus the vault -->
+  <path id="wedge" d="M 215.1 292.4 L 176.2 303.3 L 139.8 322.9 L 107.1 350.0 L 79.4 384.5
+                      A 195 195 0 0 1 102.8 162.1
+                      L 144.8 176.2 L 181.6 197.6 L 212.2 225.2 L 235.8 258.0
+                      A 35 35 0 0 0 215.1 292.4 Z"/>
+
+  <mask id="cleared">
+    <rect x="60" y="72" width="540" height="428" fill="#ffffff"/>
+    <use href="#wedge" fill="#000000"/>
+    <circle cx="250" cy="290" r="60" fill="#000000"/>
+  </mask>
+
+  <clipPath id="rainunion">
+    <ellipse cx="370" cy="290" rx="180" ry="120"/>
+    <ellipse cx="240" cy="290" rx="125" ry="105"/>
+  </clipPath>
+</defs>
+
+<rect x="0" y="0" width="1000" height="600" fill="#0d141d"/>
+
+<g font-family="system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif">
+
+  <text x="16" y="28" fill="#e9eef5" font-size="16" font-weight="600">The same storm from above</text>
+  <text x="16" y="45" fill="#8f9cad" font-size="11">The low levels, looking straight down. These are the features a cross-section structurally cannot show — and not one of them arises on its own.</text>
+
+  <rect x="60" y="72" width="540" height="428" fill="url(#sky2)" stroke="#2c3947" stroke-width="1"/>
+
+  <!-- downstream direction -->
+  <line x1="330" y1="98" x2="558" y2="98" stroke="#9fb0c4" stroke-width="1.8" opacity="0.85"/>
+  <path d="M 566 98 L 558 94.2 L 558 101.8 Z" fill="#9fb0c4" opacity="0.85"/>
+  <text x="330" y="116" fill="#9fb0c4" font-size="10.5">shear — the tower leans, and the anvil streams, this way</text>
+
+  <!-- precipitation, with the vault and the slot masked out of it -->
+  <g mask="url(#cleared)">
+    <g fill="#5b8fbf" opacity="0.32">
+      <ellipse cx="370" cy="290" rx="180" ry="120"/>
+      <ellipse cx="240" cy="290" rx="125" ry="105"/>
+    </g>
+    <ellipse cx="385" cy="290" rx="120" ry="78" fill="#5b8fbf" opacity="0.20"/>
+  </g>
+
+  <!-- what was cleared, tinted and outlined only where there was rain to clear -->
+  <g clip-path="url(#rainunion)">
+    <g fill="#f0c674" opacity="0.10">
+      <use href="#wedge"/>
+      <circle cx="250" cy="290" r="60"/>
+    </g>
+    <use href="#wedge" fill="none" stroke="#f0c674" stroke-width="1.5" stroke-dasharray="6 4" opacity="0.9"/>
+  </g>
+
+  <!-- mesocyclone -->
+  <circle cx="250" cy="290" r="72" fill="none" stroke="#7ee0c0" stroke-width="1.5" stroke-dasharray="7 5" opacity="0.9"/>
+  <path d="M 320.5 349.1 A 92 92 0 0 0 204.0 210.3" fill="none" stroke="#7ee0c0" stroke-width="1.5" opacity="0.5"/>
+  <path d="M 196.2 214.8 L 202.0 206.8 L 206.0 213.8 Z" fill="#7ee0c0" opacity="0.7"/>
+
+  <!-- tornado, wall cloud, debris -->
+  <circle cx="260" cy="290" r="29" fill="none" stroke="#c6cfdb" stroke-width="1.2" stroke-dasharray="4 3" opacity="0.85"/>
+  <circle cx="260" cy="290" r="14" fill="#8a7f6f" opacity="0.9"/>
+  <circle cx="260" cy="290" r="8" fill="#eef2f7"/>
+
+  <!-- toward the camera -->
+  <line x1="250" y1="452" x2="250" y2="486" stroke="#7d8b9c" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <path d="M 250 494 L 246.2 486 L 253.8 486 Z" fill="#7d8b9c"/>
+  <text x="264" y="480" fill="#7d8b9c" font-size="10">the shipped camera is this way, 18 km out</text>
+
+  <!-- scale bar -->
+  <g stroke="#8f9cad" stroke-width="1.4">
+    <line x1="78" y1="478" x2="155" y2="478"/>
+    <line x1="78" y1="473" x2="78" y2="483"/>
+    <line x1="155" y1="473" x2="155" y2="483"/>
+  </g>
+  <text x="78" y="467" fill="#8f9cad" font-size="10">2 km</text>
+
+  <!-- legend -->
+  <g>
+    <rect x="624" y="103" width="11" height="11" fill="none" stroke="#7ee0c0" stroke-width="1.4" stroke-dasharray="4 3"/>
+    <text x="644" y="112" fill="#7ee0c0" font-size="11.5" font-weight="600">the mesocyclone — 3.6 km core</text>
+    <text x="644" y="127" fill="#9fb0c4" font-size="10.5">Rotating cyclonically: counter-clockwise seen from above, which is what a</text>
+    <text x="644" y="140" fill="#9fb0c4" font-size="10.5">Northern Hemisphere supercell does. Imposed by nudging the tangential</text>
+    <text x="644" y="153" fill="#9fb0c4" font-size="10.5">flow toward a Rankine vortex, not grown by tilting and stretching.</text>
+
+    <rect x="624" y="181" width="11" height="11" fill="none" stroke="#f0c674" stroke-width="1.4" stroke-dasharray="4 3"/>
+    <text x="644" y="190" fill="#f0c674" font-size="11.5" font-weight="600">the vault</text>
+    <text x="644" y="205" fill="#9fb0c4" font-size="10.5">Rain-free directly under the updraft, where air is rising too fast for</text>
+    <text x="644" y="218" fill="#9fb0c4" font-size="10.5">precipitation to form or fall.</text>
+
+    <rect x="624" y="246" width="11" height="11" fill="none" stroke="#f0c674" stroke-width="1.4" stroke-dasharray="4 3"/>
+    <text x="644" y="255" fill="#f0c674" font-size="11.5" font-weight="600">the rear-flank clear slot</text>
+    <text x="644" y="270" fill="#9fb0c4" font-size="10.5">A wedge cut back into the precipitation, curving with radius the way a</text>
+    <text x="644" y="283" fill="#9fb0c4" font-size="10.5">rear-flank downdraft wraps, and aimed toward the camera's left. Without</text>
+    <text x="644" y="296" fill="#9fb0c4" font-size="10.5">it the funnel hangs inside opaque rain and cannot be seen at all.</text>
+
+    <rect x="624" y="324" width="11" height="11" fill="#5b8fbf" opacity="0.55"/>
+    <text x="644" y="333" fill="#a9c6e2" font-size="11.5" font-weight="600">precipitation</text>
+    <text x="644" y="348" fill="#9fb0c4" font-size="10.5">The one field here the solver actually computes. It falls downstream of</text>
+    <text x="644" y="361" fill="#9fb0c4" font-size="10.5">the updraft because the tower it forms in leans that way.</text>
+
+    <circle cx="629.5" cy="384.5" r="5.5" fill="#8a7f6f"/>
+    <text x="644" y="389" fill="#c6cfdb" font-size="11.5" font-weight="600">tornado, wall cloud and debris cloud</text>
+    <text x="644" y="404" fill="#9fb0c4" font-size="10.5">About 700 m across, shown to scale. Analytic geometry evaluated in the</text>
+    <text x="644" y="417" fill="#9fb0c4" font-size="10.5">renderer; the solver neither produces them nor knows they are there.</text>
+  </g>
+
+  <!-- the honest note -->
+  <rect x="624" y="437" width="356" height="63" rx="3" fill="#ffffff" opacity="0.04"/>
+  <rect x="624" y="437" width="3" height="63" fill="#e06c75" opacity="0.7"/>
+  <text x="640" y="456" fill="#e0a3a3" font-size="11" font-weight="600">There is no hook echo.</text>
+  <text x="640" y="471" fill="#9fb0c4" font-size="10.5">A real supercell wraps its precipitation around the mesocyclone into</text>
+  <text x="640" y="484" fill="#9fb0c4" font-size="10.5">a hook. Here the rain is notched, not wrapped — the asymmetry that</text>
+  <text x="640" y="497" fill="#9fb0c4" font-size="10.5">would wrap it is exactly what imposed rotation does not produce.</text>
+
+  <!-- caption -->
+  <text x="16" y="528" fill="#8f9cad" font-size="10.5">Drawn to scale; the frame is 14 km across. Compare the cross-section: the vault and the slot are why the funnel there is visible at all, and neither of them exists in the solver.</text>
+  <text x="16" y="544" fill="#8f9cad" font-size="10.5">The clear slot's azimuth is a constant in the renderer — 2.60 radians, chosen so the opening faces the camera's left. It does not follow the storm, because nothing in the storm produces it.</text>
+
+</g>
+</svg>

@@ -806,6 +806,7 @@ shaders/
 docs/
   METEOROLOGY.md         the physics behind the storm, and where it is stagecraft
   storm-structure.svg    its cross-section diagram
+  storm-plan-view.svg    and the view from above
   phase*.png             the images above
 
 spikes/01-perf/          what a raymarch step costs
